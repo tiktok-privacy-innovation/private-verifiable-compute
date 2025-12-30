@@ -1,0 +1,10 @@
+version: 1
+
+sources:
+  - channel: jammy main
+    url: https://download.01.org/intel-sgx/sgx_repo/ubuntu
+archs:
+  - "amd64"
+packages:
+  - "libsgx-dcap-default-qpl"
+  - "libsgx-dcap-quote-verify"

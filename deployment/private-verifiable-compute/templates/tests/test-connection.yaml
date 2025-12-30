@@ -1,0 +1,15 @@
+apiVersion: v1
+kind: Pod
+metadata:
+  name: "{{ include "private-verifiable-compute.fullname" . }}-test-connection"
+  labels:
+    {{- include "private-verifiable-compute.labels" . | nindent 4 }}
+  annotations:
+    "helm.sh/hook": test
+spec:
+  containers:
+    - name: wget
+      image: busybox
+      command: ['wget']
+      args: ['{{ include "pvc.privacy-gateway.name" . }}:{{ .Values.privacyGateway.service.port }}']
+  restartPolicy: Never

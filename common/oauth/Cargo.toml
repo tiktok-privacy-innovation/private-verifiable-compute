@@ -1,0 +1,13 @@
+[package]
+name = "oauth"
+version = "0.1.0"
+license = "Apache-2.0"
+edition.workspace = true
+
+[dependencies]
+async-trait = { workspace = true }
+anyhow = { workspace = true }
+reqwest = { workspace = true }
+tracing = { workspace = true }
+tokio = { workspace = true }
+openidconnect = { version = "4.0.1", features = ["reqwest"] }

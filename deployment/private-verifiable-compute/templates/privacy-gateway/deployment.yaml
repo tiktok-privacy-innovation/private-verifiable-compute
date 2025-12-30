@@ -1,0 +1,83 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "pvc.privacy-gateway.name" . }}
+  labels:
+    {{- include "pvc.privacy-gateway.labels" . | nindent 4 }}
+  namespace: {{ .Values.namespace }}
+spec:
+  {{- if not .Values.privacyGateway.autoscaling.enabled }}
+  replicas: {{ .Values.privacyGateway.replicaCount }}
+  {{- end }}
+  selector:
+    matchLabels:
+      {{- include "pvc.privacy-gateway.selectorLabels" . | nindent 6 }}
+  template:
+    metadata:
+      {{- with .Values.privacyGateway.podAnnotations }}
+      annotations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      labels:
+        {{- include "pvc.privacy-gateway.labels" . | nindent 8 }}
+        {{- with .Values.privacyGateway.podLabels }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+    spec:
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      serviceAccountName: {{ include "pvc.privacy-gateway.serviceAccountName" . }}
+      securityContext:
+        {{- toYaml .Values.podSecurityContext | nindent 8 }}
+
+      containers:
+        - name: {{ .Chart.Name }}
+          securityContext:
+            {{- toYaml .Values.privacyGateway.securityContext | nindent 12 }}
+          image: "{{ .Values.privacyGateway.image.repository }}:{{ .Values.privacyGateway.image.tag | default .Chart.AppVersion }}"
+          imagePullPolicy: {{ .Values.privacyGateway.image.pullPolicy }}
+          env:
+            - name: ALLOWED_TARGET_ORIGINS
+              valueFrom:
+                configMapKeyRef:
+                  name: pvc-configmap
+                  key:  allow_target_origins
+            - name: BACKEND_URL
+              valueFrom:
+                configMapKeyRef:
+                  name: pvc-configmap
+                  key:  backend_url
+            - name: TARGET_REWRITES
+              value: '{"pvc-tee-llm:9000":{"scheme":"http","host":"pvc-tee-llm:9000"}}'
+          ports:
+            - name: http
+              containerPort: {{ .Values.privacyGateway.service.port }}
+              protocol: TCP
+          livenessProbe:
+            {{- toYaml .Values.privacyGateway.livenessProbe | nindent 12 }}
+          readinessProbe:
+            {{- toYaml .Values.privacyGateway.readinessProbe | nindent 12 }}
+          resources:
+            {{- toYaml .Values.privacyGateway.resources | nindent 12 }}
+          {{- with .Values.privacyGateway.volumeMounts }}
+          volumeMounts:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+      {{- with .Values.privacyGateway.volumes }}
+      volumes:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.privacyGateway.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.privacyGateway.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.privacyGateway.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}

@@ -1,0 +1,17 @@
+# Documents
+{{#each documents}}
+{{content}}
+{{/each}}
+
+# User inputs
+{{input}}
+
+# History
+{{#each history}}
+<message role="user">
+{{user_content}}
+</message>
+<message role="assistant">
+{{assistant_content}}
+</message>
+{{/each}}

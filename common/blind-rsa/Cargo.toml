@@ -1,0 +1,13 @@
+[package]
+name = "blind-rsa"
+version = "0.1.0"
+edition.workspace = true
+
+[dependencies]
+anyhow = { workspace = true }
+blind-rsa-signatures = { workspace = true }
+rand = { workspace = true }
+serde = { workspace = true }
+rsa = "0.8.2"
+num-bigint-dig = "0.8.4"
+zeroize = "1.8.1"

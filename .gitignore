@@ -1,0 +1,10 @@
+.idea
+.terraform.lock.hcl
+site/*
+*.bazel.lock
+.gitconfig
+bazel-*
+.DS_Store
+.env
+# Added by cargo
+/target

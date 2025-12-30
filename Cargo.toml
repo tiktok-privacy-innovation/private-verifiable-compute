@@ -1,0 +1,78 @@
+[workspace]
+members = [
+    "common/noise",
+    "common/identity",
+    "pvc-identity-server",
+    "common/blind-rsa",
+    "common/types",
+    "common/ohttp",
+    "pvc-client",
+    "pvc-tee-llm",
+    "pvc-ohttp-gateway",
+    "pvc-ohttp-relay"
+, "common/oauth"]
+resolver = "2"
+
+[workspace.package]
+edition = "2024"
+
+[workspace.dependencies]
+snow = "0.10.0"
+anyhow = "1.0.100"
+reqwest = { version = "0.12.23", default-features = false, features = [
+    "json",
+    "rustls-tls",
+    "native-tls-vendored",
+    "stream"
+] }
+url = "2.5.7"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+tracing = "0.1.40"
+tracing-appender = "0.2"
+tracing-core = "0.1"
+tracing-log = "0.2"
+tracing-subscriber = { version = "0.3", features = ["env-filter", "json"] }
+hex = "0.4"
+warp = { version = "0.4.2"}
+blind-rsa-signatures = "0.15.2"
+rand = "0.8.5"
+rustls = "0.23.34"
+bincode = "1"
+rsa = "0.9.8"
+async-trait = "0.1"
+thiserror = "2.0"
+base64 = "0.22"
+futures-util = "0.3.30"
+futures = "0.3"
+sha2 = "0.9.3"
+rocket = { version = "0.5.1", features = ["json"] }
+rocket_runtime_tokio = "0.5.1"
+dashmap = { version = "6.1.0" }
+tokio = { version = "1.x", features = ["full"] }
+uuid = { version = "1.18.1", features = ["v4"] }
+ohttp-gateway = "0.2.5"
+ohttp-relay = "0.0.11"
+axum = { version = "0.7", features = ["macros"] }
+hyper = { version = "1.6", features = ["full"] }
+hyper-util = { version = "0.1", features = ["full"] }
+tower = "0.4"
+tower-http = { version = "0.6", features = [
+    "cors",
+    "trace",
+    "compression-br",
+    "timeout",
+] }
+p256 = "0.13.2"
+rand_core = { version = "0.6", features = [] }
+kbs-types = "0.14.0"
+identity = { path = "common/identity" }
+types = { path = "common/types" }
+blind-rsa = { path = "common/blind-rsa" }
+ohttp_wrap = { path = "common/ohttp" }
+noise = { path = "common/noise" }
+oauth = { path = "common/oauth" }
+openai-api-rs = { version = "7.0.1" }
+
+[patch."https://github.com/openanolis/csv-rs.git"]
+csv-rs = { git = "https://github.com/privacywill/csv-rs.git", rev = "b67a07e" }

@@ -1,0 +1,77 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "pvc.relay.name" . }}
+  labels:
+    {{- include "pvc.relay.labels" . | nindent 4 }}
+  namespace: {{ .Values.namespace }}
+spec:
+  {{- if not .Values.relay.autoscaling.enabled }}
+  replicas: {{ .Values.relay.replicaCount }}
+  {{- end }}
+  selector:
+    matchLabels:
+      {{- include "pvc.relay.selectorLabels" . | nindent 6 }}
+  template:
+    metadata:
+      {{- with .Values.relay.podAnnotations }}
+      annotations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      labels:
+        {{- include "pvc.relay.labels" . | nindent 8 }}
+        {{- with .Values.relay.podLabels }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+    spec:
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      serviceAccountName: {{ include "pvc.relay.serviceAccountName" . }}
+      securityContext:
+        {{- toYaml .Values.podSecurityContext | nindent 8 }}
+      containers:
+        - name: {{ .Chart.Name }}
+          securityContext:
+            {{- toYaml .Values.relay.securityContext | nindent 12 }}
+          image: "{{ .Values.relay.image.repository }}:{{ .Values.relay.image.tag | default .Chart.AppVersion }}"
+          imagePullPolicy: {{ .Values.relay.image.pullPolicy }}
+          env:
+          - name: GATEWAY_ORIGIN
+            valueFrom:
+              configMapKeyRef:
+                name: pvc-configmap
+                key: gateway_url
+          - name: PORT
+            value: {{ .Values.relay.service.port | quote }}
+          ports:
+            - name: http
+              containerPort: {{ .Values.relay.service.port }}
+              protocol: TCP
+          livenessProbe:
+            {{- toYaml .Values.relay.livenessProbe | nindent 12 }}
+          readinessProbe:
+            {{- toYaml .Values.relay.readinessProbe | nindent 12 }}
+          resources:
+            {{- toYaml .Values.relay.resources | nindent 12 }}
+          {{- with .Values.relay.volumeMounts }}
+          volumeMounts:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+      {{- with .Values.relay.volumes }}
+      volumes:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.relay.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.relay.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.relay.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}

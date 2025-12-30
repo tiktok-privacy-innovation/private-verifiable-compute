@@ -1,0 +1,6 @@
+[toolchain]
+channel = "stable"
+versioned = "1.91.0"
+components = ["rustfmt", "rustc-dev", "rust-analyzer", "rust-std"]
+targets = ["x86_64-unknown-linux-gnu"]
+profile = "minimal"

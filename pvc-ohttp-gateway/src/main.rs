@@ -1,0 +1,203 @@
+// Copyright 2025 TikTok Inc. and/or its affiliates
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     https://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+use axum::{Router, middleware as axum_middleware, routing};
+use ohttp_gateway::config::{AppConfig, LogFormat};
+use ohttp_gateway::handlers;
+use ohttp_gateway::middleware;
+use ohttp_gateway::state::AppState;
+use std::net::SocketAddr;
+use std::time::Duration;
+use tokio::net::TcpListener;
+use tokio::signal;
+use tower_http::compression::CompressionLayer;
+use tower_http::cors::{Any, CorsLayer};
+use tower_http::timeout::TimeoutLayer;
+use tower_http::trace::TraceLayer;
+use tracing::{info, warn};
+
+#[tokio::main]
+async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    // Load configuration first
+    let config = AppConfig::from_env()?;
+
+    // Initialize tracing based on config
+    initialize_tracing(&config);
+
+    info!("Starting OHTTP Gateway v{}", env!("CARGO_PKG_VERSION"));
+    info!("Configuration loaded: {:?}", config);
+
+    // Initialize application state
+    let app_state = AppState::new(config.clone()).await?;
+
+    // Start key rotation scheduler
+    if config.key_rotation_enabled {
+        info!("Starting automatic key rotation scheduler");
+        app_state
+            .key_manager
+            .clone()
+            .start_rotation_scheduler()
+            .await;
+    } else {
+        warn!("Automatic key rotation is disabled");
+    }
+
+    // Create router
+    let app = create_router(app_state.clone(), &config);
+
+    // Parse socket address
+    let addr: SocketAddr = config.port.parse()?;
+    let listener = TcpListener::bind(addr).await?;
+
+    info!("OHTTP Gateway listening on {}", addr);
+    info!("Backend URL: {}", config.backend_url);
+
+    if let Some(allowed) = &config.allowed_target_origins {
+        info!("Allowed origins: {:?}", allowed);
+    } else {
+        warn!("No origin restrictions configured - all targets allowed");
+    }
+
+    // Start server with graceful shutdown
+    axum::serve(
+        listener,
+        app.into_make_service_with_connect_info::<SocketAddr>(),
+    )
+    .with_graceful_shutdown(shutdown_signal())
+    .await?;
+
+    info!("Server stopped gracefully");
+    Ok(())
+}
+
+fn initialize_tracing(config: &AppConfig) {
+    use tracing_subscriber::{EnvFilter, fmt};
+
+    let env_filter = EnvFilter::try_from_default_env()
+        .unwrap_or_else(|_| EnvFilter::new(&config.log_level))
+        .add_directive("pvc-ohttp-gateway=info".parse().unwrap());
+
+    match config.log_format {
+        LogFormat::Json => {
+            fmt()
+                .json()
+                .with_env_filter(env_filter)
+                .with_target(true)
+                .with_thread_ids(true)
+                .with_file(config.debug_mode)
+                .with_line_number(config.debug_mode)
+                .init();
+        }
+        LogFormat::Default => {
+            fmt()
+                .with_env_filter(env_filter)
+                .with_target(true)
+                .with_thread_ids(true)
+                .with_file(config.debug_mode)
+                .with_line_number(config.debug_mode)
+                .init();
+        }
+    }
+}
+
+fn create_router(app_state: AppState, config: &AppConfig) -> Router {
+    const RFC_9540_GATEWAY_PATH: &str = "/.well-known/ohttp-gateway";
+    let mut app = Router::new().route(
+        RFC_9540_GATEWAY_PATH,
+        routing::post(handlers::ohttp::handle_ohttp_request),
+    );
+
+    // Add routes
+    app = app.merge(handlers::routes());
+
+    // Add middleware layers (order matters - first added is executed last)
+    app = app.layer(
+        tower::ServiceBuilder::new()
+            // Outer layers (executed first on request, last on response)
+            .layer(TraceLayer::new_for_http())
+            .layer(CompressionLayer::new())
+            .layer(TimeoutLayer::new(Duration::from_secs(120)))
+            // Security middleware
+            .layer(axum_middleware::from_fn_with_state(
+                app_state.clone(),
+                middleware::security::security_middleware,
+            ))
+            // Request validation
+            .layer(axum_middleware::from_fn(
+                middleware::security::request_validation_middleware,
+            ))
+            // Logging middleware
+            .layer(axum_middleware::from_fn_with_state(
+                app_state.clone(),
+                middleware::logging::logging_middleware,
+            ))
+            // Metrics middleware
+            .layer(axum_middleware::from_fn_with_state(
+                app_state.clone(),
+                middleware::metrics::metrics_middleware,
+            ))
+            // CORS configuration
+            .layer(create_cors_layer(config)),
+    );
+
+    app.with_state(app_state)
+}
+
+fn create_cors_layer(config: &AppConfig) -> CorsLayer {
+    if config.debug_mode {
+        // Permissive CORS in debug mode
+        CorsLayer::new()
+            .allow_origin(Any)
+            .allow_methods(Any)
+            .allow_headers(Any)
+    } else {
+        // Restrictive CORS in production
+        CorsLayer::new()
+            .allow_origin([
+                "https://example.com".parse().unwrap(),
+                // Add your allowed origins here
+            ])
+            .allow_methods([axum::http::Method::GET, axum::http::Method::POST])
+            .allow_headers([axum::http::header::CONTENT_TYPE, axum::http::header::ACCEPT])
+            .max_age(Duration::from_secs(3600))
+    }
+}
+
+async fn shutdown_signal() {
+    let ctrl_c = async {
+        signal::ctrl_c()
+            .await
+            .expect("failed to install Ctrl+C handler");
+    };
+
+    #[cfg(unix)]
+    let terminate = async {
+        signal::unix::signal(signal::unix::SignalKind::terminate())
+            .expect("failed to install signal handler")
+            .recv()
+            .await;
+    };
+
+    #[cfg(not(unix))]
+    let terminate = std::future::pending::<()>();
+
+    tokio::select! {
+        _ = ctrl_c => {
+            info!("Received Ctrl+C, starting graceful shutdown");
+        },
+        _ = terminate => {
+            info!("Received SIGTERM, starting graceful shutdown");
+        },
+    }
+}

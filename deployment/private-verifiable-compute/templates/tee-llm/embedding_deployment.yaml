@@ -1,0 +1,74 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "pvc.tee-embedding.name" . }}
+  labels:
+    {{- include "pvc.tee-embedding.labels" . | nindent 4 }}
+  namespace: {{ .Values.namespace }}
+spec:
+  {{- if not .Values.teeLlm.autoscaling.enabled }}
+  replicas: {{ .Values.teeLlm.replicaCount }}
+  {{- end }}
+  selector:
+    matchLabels:
+      {{- include "pvc.tee-embedding.selectorLabels" . | nindent 6 }}
+  template:
+    metadata:
+      {{- with .Values.teeLlm.podAnnotations }}
+      annotations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      labels:
+        {{- include "pvc.tee-embedding.labels" . | nindent 8 }}
+        {{- with .Values.teeLlm.podLabels }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+    spec:
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      containers:
+        - name: "embedding"
+          image: "{{ .Values.teeLlm.embeddingImage.repository }}:{{ .Values.teeLlm.embeddingImage.tag | default .Chart.AppVersion }}"
+          imagePullPolicy: "IfNotPresent"
+          env:
+          - name: LD_LIBRARY_PATH
+            value: ${LD_LIBRARY_PATH}:/usr/local/nvidia/lib64
+          - name: VLLM_LOGGING_LEVEL
+            value: DEBUG
+          - name: EMBEDDING_MODEL
+            value: {{ .Values.teeLlm.embeddingModel }}
+          - name: EMBEDDING_PORT 
+            value: {{ .Values.teeLlm.embeddingPort | quote }}
+          ports:
+            - name: http
+              containerPort: {{ .Values.teeLlm.embeddingPort }}
+              protocol: TCP
+          livenessProbe:
+            {{- toYaml .Values.teeLlm.livenessProbe | nindent 12 }}
+          readinessProbe:
+            {{- toYaml .Values.teeLlm.readinessProbe | nindent 12 }}
+          command: ["/bin/sh", "-c"]
+          {{- with .Values.teeLlm.embeddingArgs }}
+          args:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          resources:
+            {{- toYaml .Values.teeLlm.resources | nindent 12 }}
+      {{- with .Values.teeLlm.volumes }}
+      volumes:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.teeLlm.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.teeLlm.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.teeLlm.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}

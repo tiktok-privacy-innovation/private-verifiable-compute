@@ -1,0 +1,15 @@
+# configmap.yaml
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: pvc-configmap
+  namespace: {{ .Values.namespace }}
+data:
+  gateway_url: {{ include "pvc.gateway.url" . }}
+  identity_server_url: {{ include "pvc.identity.url" . }}
+  relay_url: {{ include "pvc.relay.url" . }}
+  backend_url: {{ include "pvc.tee-server.url" . }}
+  allow_target_origins:  {{ include "pvc.target.url" . }}
+  target: {{ include "pvc.target.url" . }}
+  embedding_url: {{ printf "%s/v1" (include "pvc.tee-embedding.url" .) }}
+  llm_url: {{ printf "%s/v1" (include "pvc.tee-llm.url" .) }}

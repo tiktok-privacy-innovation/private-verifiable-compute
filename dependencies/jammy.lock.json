@@ -1,0 +1,27 @@
+{
+	"packages": [
+		{
+			"arch": "amd64",
+			"dependencies": [],
+			"key": "libsgx-dcap-default-qpl_1.23.100.0-jammy1_amd64",
+			"name": "libsgx-dcap-default-qpl",
+			"sha256": "dea30d31655a32225fa61b1cb94d8a60686f5a8449bb1e1d0c3beb301f59e855",
+			"urls": [
+				"https://download.01.org/intel-sgx/sgx_repo/ubuntu/pool/main/libs/libsgx-dcap-default-qpl/libsgx-dcap-default-qpl_1.23.100.0-jammy1_amd64.deb"
+			],
+			"version": "1.23.100.0-jammy1"
+		},
+		{
+			"arch": "amd64",
+			"dependencies": [],
+			"key": "libsgx-dcap-quote-verify_1.23.100.0-jammy1_amd64",
+			"name": "libsgx-dcap-quote-verify",
+			"sha256": "158cb1c6e137f41deb824ecb12b9fdc501ab8d5db6c1fce3e23629ba31880fdb",
+			"urls": [
+				"https://download.01.org/intel-sgx/sgx_repo/ubuntu/pool/main/libs/libsgx-dcap-quote-verify/libsgx-dcap-quote-verify_1.23.100.0-jammy1_amd64.deb"
+			],
+			"version": "1.23.100.0-jammy1"
+		}
+	],
+	"version": 1
+}

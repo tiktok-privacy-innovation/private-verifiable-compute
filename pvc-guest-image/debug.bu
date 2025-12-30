@@ -1,0 +1,10 @@
+variant: fcos
+version: 1.5.0
+passwd:
+  users:
+    - name: debuguser
+      password_hash: $6$FrkcwCS0av9egIbi$v8fgjiRhrZ0am4f/dc982RaZMhkVlGqVlaCXYRdu3EgYR9Eip419vxBJtBjy1ECBTU..S4G2NhzbVffm03wmA.
+systemd:
+  units:
+    - name: sshd.service
+      enabled: true

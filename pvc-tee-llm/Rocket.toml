@@ -1,0 +1,29 @@
+[release]
+llm_endpoint = "http://localhost:8000/v1/"
+llm_model = "Qwen/Qwen3-8B-FP8"
+embedding_model = "Qwen/Qwen3-Embedding-4B"
+emdedding_endpoint = "http://localhost:8001/v1"
+api_key = ""
+ndims = 4096
+max_tokens = 28672
+
+[default]
+address = "0.0.0.0"
+handshake = "/handshake"
+inference = "/inference"
+health = "/health"
+attestation = "/attestation"
+attestation_with_nonce = "/attestation"
+system_prompt = "prompts/system.txt"
+chat_template = "prompts/template.txt"
+max_tokens = 2048
+port = 9000
+llm_model = "Qwen/Qwen3-VL-4B-Thinking"
+llm_endpoint = ""
+embedding_model = "Qwen/Qwen3-Embedding-8B"
+emdedding_endpoint = ""
+redis_endpoint = ""
+api_key = ""
+ndims = 4096
+
+[debug]

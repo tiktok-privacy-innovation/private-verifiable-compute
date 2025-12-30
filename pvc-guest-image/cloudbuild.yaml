@@ -1,0 +1,79 @@
+substitutions:
+  '_MACHINE_TYPE_': 'c3-standard-4'
+  '_VM_NAME_': 'fcos-custom-vm'
+  '_ZONE_': 'us-central1-a'
+
+steps:
+  # Build release.ign using Butane
+  - name: 'quay.io/coreos/butane:release'
+    id: 'build-release-ign'
+    entrypoint: 'bash'
+    args:
+      - '-c'
+      - |
+        butane --pretty --strict < release.bu > release.ign
+
+  # Build debug.ign using Butane
+  - name: 'quay.io/coreos/butane:release'
+    id: 'build-debug-ign'
+    entrypoint: 'bash'
+    args:
+      - '-c'
+      - |
+        butane --pretty --strict < debug.bu > debug.ign
+
+  # create GCE VM instance in release mode
+  - name: 'gcr.io/google.com/cloudsdktool/cloud-sdk'
+    id: 'create-release-vm'
+    entrypoint: 'bash'
+    args:
+      - '-c'
+      - |
+        gcloud compute instances create ${_VM_NAME_} \
+          --zone=$_ZONE_ \
+          --image-family=fedora-coreos-stable \
+          --image-project=fedora-coreos-cloud \
+          --machine-type=$_MACHINE_TYPE_ \
+          --confidential-compute-type=TDX \
+          --maintenance-policy=TERMINATE \
+          --metadata-from-file user-data=release.ign
+    waitFor: ['build-release-ign']
+
+  # create GCE VM instance in debug mode
+  - name: 'gcr.io/google.com/cloudsdktool/cloud-sdk'
+    id: 'create-debug-vm'
+    entrypoint: 'bash'
+    args:
+      - '-c'
+      - |
+        gcloud compute instances create ${_VM_NAME_}-debug \
+          --zone=$_ZONE_ \
+          --image-family=fedora-coreos-stable \
+          --image-project=fedora-coreos-cloud \
+          --machine-type=$_MACHINE_TYPE_ \
+          --confidential-compute-type=TDX \
+          --maintenance-policy=TERMINATE \
+          --metadata-from-file user-data=debug.ign
+    waitFor: ['build-debug-ign']
+
+  # Delete release VM
+  - name: 'gcr.io/google.com/cloudsdktool/cloud-sdk'
+    id: 'delete-release-vm'
+    entrypoint: 'bash'
+    args:
+      - '-c'
+      - |
+        gcloud compute instances delete ${_VM_NAME_} --zone=$_ZONE_ --quiet
+    waitFor: ['create-release-vm']
+
+  # Delete debug VM
+  - name: 'gcr.io/google.com/cloudsdktool/cloud-sdk'
+    id: 'delete-debug-vm'
+    entrypoint: 'bash'
+    args:
+      - '-c'
+      - |
+        gcloud compute instances delete ${_VM_NAME_}-debug --zone=$_ZONE_ --quiet
+    waitFor: ['create-debug-vm']
+
+timeout: 1200s

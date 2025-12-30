@@ -1,0 +1,17 @@
+[package]
+name = "pvc-identity-server"
+version = "0.1.0"
+license = "Apache-2.0"
+edition.workspace = true
+
+[dependencies]
+base64 = { workspace = true }
+blind-rsa-signatures = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+rocket = { version = "0.5.0-rc.3", features = ["json"] }
+blind-rsa = { workspace = true }
+types = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+oauth = { workspace = true }

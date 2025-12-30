@@ -1,0 +1,86 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "pvc.client.name" . }}
+  labels:
+    {{- include "pvc.client.labels" . | nindent 4 }}
+  namespace: {{ .Values.namespace }}
+spec:
+  replicas: 1
+  {{- if not .Values.client.autoscaling.enabled }}
+  {{- end }}
+  selector:
+    matchLabels:
+      {{- include "pvc.client.selectorLabels" . | nindent 6 }}
+  template:
+    metadata:
+      {{- with .Values.client.podAnnotations }}
+      annotations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      labels:
+        {{- include "pvc.client.labels" . | nindent 8 }}
+        {{- with .Values.client.podLabels }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+    spec:
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      serviceAccountName: {{ include "pvc.client.serviceAccountName" . }}
+      securityContext:
+        {{- toYaml .Values.podSecurityContext | nindent 8 }}
+      containers:
+        - name: {{ .Chart.Name }}
+          securityContext:
+            {{- toYaml .Values.client.securityContext | nindent 12 }}
+          image: "{{ .Values.client.image.repository }}:{{ .Values.client.image.tag | default .Chart.AppVersion }}"
+          imagePullPolicy: {{ .Values.client.image.pullPolicy }}
+          env:
+            - name: IDENTITY_SERVER_URL
+              valueFrom:
+                configMapKeyRef:
+                  name: pvc-configmap
+                  key: identity_server_url
+            - name: RELAY_URL
+              valueFrom:
+                configMapKeyRef:
+                  name: pvc-configmap
+                  key: relay_url 
+            - name: GATEWAY_URL
+              valueFrom:
+                configMapKeyRef:
+                  name: pvc-configmap
+                  key: gateway_url
+            - name: TARGET_URL
+              valueFrom:
+                configMapKeyRef:
+                  name: pvc-configmap
+                  key: target
+          ports:
+            - name: http
+              containerPort: {{ .Values.client.service.port }}
+              protocol: TCP
+          resources:
+            {{- toYaml .Values.client.resources | nindent 12 }}
+          {{- with .Values.client.volumeMounts }}
+          volumeMounts:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+      {{- with .Values.client.volumes }}
+      volumes:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.client.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.client.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.client.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}

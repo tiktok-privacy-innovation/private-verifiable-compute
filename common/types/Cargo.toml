@@ -1,0 +1,21 @@
+[package]
+name = "types"
+version = "0.1.0"
+license = "Apache-2.0"
+edition.workspace = true
+
+[dependencies]
+anyhow = { workspace = true }
+reqwest = { workspace = true }
+url = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+tracing = { workspace = true }
+thiserror = { workspace = true }
+p256 = { workspace = true }
+kbs-types = { workspace = true }
+sha2 = { workspace = true }
+hex = { workspace = true }
+rocket = { workspace = true }
+[dev-dependencies]
+rand_core = { workspace = true }

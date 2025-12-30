@@ -1,0 +1,47 @@
+[package]
+name = "pvc-tee-llm"
+version = "0.1.0"
+license = "Apache-2.0"
+edition.workspace = true
+
+[features]
+default = ["attestation", "sqlite"]
+attestation = ["dep:attester"]
+sqlite = [ "dep:rusqlite", "dep:sqlite-vec" ]
+
+[dependencies]
+rocket = { workspace = true }
+dashmap = { version = "6.1.0" }
+chrono = { version = "0.4" }
+noise = { workspace = true }
+serde = { workspace = true }
+anyhow = { workspace = true }
+uuid = { workspace = true }
+rand = { workspace = true }
+tokio = { workspace = true }
+tracing = { workspace = true }
+types = { workspace = true }
+tracing-subscriber = { workspace = true }
+base64 = { workspace = true }
+zeroize = "1.8.2"
+serde_json = { workspace = true }
+openai-api-rs = { workspace = true }
+p256 = { workspace = true }
+rand_core = { workspace = true }
+kbs-types = { workspace = true }
+hex = { workspace = true }
+reqwest = { workspace = true }
+regex = "1.12.2"
+handlebars = "6.3.2"
+
+attester = { git = "https://github.com/confidential-containers/guest-components", features = ["tdx-attester", "nvidia-attester"], optional = true }
+rig-sqlite = "0.1.27"
+rig-core = { version = "0.24.0", default-features = false }
+lru = "0.16"
+rusqlite = { version = "0.32", optional = true }
+sqlite-vec = {version = "0.1", optional = true }
+tokio-rusqlite = { version = "0.6.0", default-features = false }
+thiserror = { version = "2.0.17" }
+redis = { version = "1.0.1", features = ["tokio-comp", "cluster", "cluster-async", "json", "aio", "connection-manager"] }
+log = { version = "0.4" }
+nvml-wrapper = { version = "0.11.0", default-features = false, features = ["serde"] }

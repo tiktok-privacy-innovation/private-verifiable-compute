@@ -1,0 +1,149 @@
+# Core Bazel dependencies
+bazel_dep(name = "bazel_skylib", version = "1.8.2")
+
+# Protocol Buffers
+bazel_dep(name = "rules_proto", version = "7.1.0")
+
+bazel_dep(name = "aspect_bazel_lib", version = "2.22.0", dev_dependency = True)
+
+# Node.js and TypeScript dependencies
+bazel_dep(name = "aspect_rules_js", version = "2.5.0")
+bazel_dep(name = "aspect_rules_ts", version = "3.7.0")
+bazel_dep(name = "aspect_rules_swc", version = "2.4.4")
+
+npm = use_extension("@aspect_rules_js//npm:extensions.bzl", "npm", dev_dependency = True)
+npm.npm_translate_lock(
+    name = "npm",
+    no_optional = False,
+    pnpm_lock = "//pvc-client/frontend:pnpm-lock.yaml",
+    verify_node_modules_ignored = "//:.bazelignore",
+)
+use_repo(npm, "npm")
+
+rules_ts_ext = use_extension("@aspect_rules_ts//ts:extensions.bzl", "ext", dev_dependency = True)
+rules_ts_ext.deps(ts_version = "5.7.3")
+use_repo(rules_ts_ext, "npm_typescript")
+
+# Container (OCI) rules
+bazel_dep(name = "rules_oci", version = "2.0.0")
+
+oci = use_extension("@rules_oci//oci:extensions.bzl", "oci")
+
+# Distroless base images
+
+oci.pull(
+    name = "distroless_cc",
+    digest = "sha256:620d8b11ae800f0dbd7995f89ddc5344ad603269ea98770588b1b07a4a0a6872",
+    image = "gcr.io/distroless/cc-debian12",
+    platforms = ["linux/amd64"],
+)
+use_repo(
+    oci,
+    "distroless_cc",
+    "distroless_cc_linux_amd64",
+)
+
+# Build and packaging tools
+bazel_dep(name = "rules_pkg", version = "1.0.1")
+bazel_dep(name = "rules_multirun", version = "0.10.0")
+bazel_dep(name = "rules_distroless", version = "0.5.1")
+
+# Go dependencies
+bazel_dep(name = "rules_go", version = "0.57.0")
+bazel_dep(name = "gazelle", version = "0.45.0")
+
+go_sdk = use_extension("@rules_go//go:extensions.bzl", "go_sdk")
+go_sdk.download(
+    name = "go_sdk",
+    version = "1.24.6",
+)
+use_repo(go_sdk, "go_sdk")
+
+register_toolchains("@go_sdk//:all")
+
+# gazelle:proto disable_global
+
+# Rust dependencies
+bazel_dep(name = "rules_rust", version = "0.67.0")
+bazel_dep(name = "openssl", version = "3.3.1.bcr.7")
+
+rust = use_extension("@rules_rust//rust:extensions.bzl", "rust")
+rust.toolchain(
+    edition = "2024",
+    versions = ["1.91.0"],
+)
+use_repo(rust, "rust_toolchains")
+
+crate = use_extension("@rules_rust//crate_universe:extensions.bzl", "crate")
+crate.from_cargo(
+    name = "crates",
+    cargo_lockfile = "//:Cargo.lock",
+    manifests = ["//:Cargo.toml"],
+)
+
+inject_repo(crate, "openssl")
+
+crate.annotation(
+    build_script_data = ["@openssl//:gen_dir"],
+    build_script_env = {
+        "OPENSSL_NO_VENDOR": "1",
+        "OPENSSL_STATIC": "1",
+        "OPENSSL_DIR": "$(execpath @openssl//:gen_dir)",
+    },
+    crate = "openssl-sys",
+)
+use_repo(crate, "crates")
+
+# External tools
+http_file = use_repo_rule("@bazel_tools//tools/build_defs/repo:http.bzl", "http_file")
+
+# Butane tool for CoreOS configuration
+http_file(
+    name = "butane_linux",
+    executable = True,
+    sha256 = "c9bf44bed655215384fca24c3ebf2b547965d9c522cf959e735201c5f97ea467",
+    urls = ["https://github.com/coreos/butane/releases/download/v0.25.1/butane-x86_64-unknown-linux-gnu"],
+)
+
+http_file(
+    name = "butane_macos",
+    executable = True,
+    sha256 = "01e96ef6d17e71733badca99852a9d0844e9a17f83822b261f5621c152b8d932",
+    urls = ["https://github.com/coreos/butane/releases/download/v0.25.1/butane-x86_64-apple-darwin"],
+)
+
+apt = use_extension(
+    "@rules_distroless//apt:extensions.bzl",
+    "apt",
+    dev_dependency = True,
+)
+apt.install(
+    name = "bookworm",
+    lock = "//dependencies:bookworm.lock.json",
+    manifest = "//dependencies:bookworm_manifest",
+)
+use_repo(apt, "bookworm")
+
+apt.install(
+    name = "jammy",
+    lock = "//dependencies:jammy.lock.json",
+    manifest = "//dependencies:jammy_manifest",
+)
+use_repo(apt, "jammy")
+
+bazel_dep(name = "rules_python", version = "1.7.0", dev_dependency = True)
+
+python = use_extension("@rules_python//python/extensions:python.bzl", "python")
+python.toolchain(
+    ignore_root_user_error = True,
+    is_default = True,
+    python_version = "3.11",
+)
+
+bazel_dep(
+    name = "aspect_rules_lint",
+    version = "1.13.0",
+    dev_dependency = True,
+)
+bazel_dep(name = "buildifier_prebuilt", version = "8.2.1.1", dev_dependency = True)
+bazel_dep(name = "rules_shell", version = "0.6.1", dev_dependency = True)

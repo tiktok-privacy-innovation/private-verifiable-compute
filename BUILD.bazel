@@ -1,0 +1,93 @@
+# Copyright 2025 TikTok Inc. and/or its affiliates
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     https://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+load("@aspect_rules_lint//format:defs.bzl", "format_multirun", "format_test")
+load("@gazelle//:def.bzl", "gazelle")
+load("@rules_multirun//:defs.bzl", "multirun")
+load("@rules_oci//oci:defs.bzl", "oci_push")
+
+gazelle(name = "gazelle")
+
+REPOS = {
+    "pvc-client": "us-docker.pkg.dev/$$project_id/pvc-$$namespace-images/pvc-client",
+    "pvc-identity-server": "us-docker.pkg.dev/$$project_id/pvc-$$namespace-images/pvc-identity-server",
+    "pvc-ohttp-relay": "us-docker.pkg.dev/$$project_id/pvc-$$namespace-images/pvc-ohttp-relay",
+    "pvc-ohttp-gateway": "us-docker.pkg.dev/$$project_id/pvc-$$namespace-images/pvc-ohttp-gateway",
+    "pvc-tee-llm": "us-docker.pkg.dev/$$project_id/pvc-$$namespace-images/pvc-tee-llm",
+}
+
+[
+    genrule(
+        name = "{}_repo".format(k),
+        outs = ["{}_repo.txt".format(k)],
+        cmd = "echo '{}' | envsubst > $@".format(v),
+    )
+    for (k, v) in REPOS.items()
+]
+
+[
+    oci_push(
+        name = "push_{}_image".format(k),
+        image = "//{}:image".format(k),
+        remote_tags = ["latest"],
+        repository_file = ":{}_repo".format(k),
+    )
+    for k in REPOS.keys()
+]
+
+multirun(
+    name = "push_all_images",
+    commands = [
+        "push_{}_image".format(k)
+        for k in REPOS.keys()
+    ],
+    jobs = 0,
+)
+
+multirun(
+    name = "load_all_images",
+    commands = [
+        "//{}:load_image".format(k)
+        for k in REPOS.keys()
+    ],
+)
+
+config_setting(
+    name = "feat_attestation_off",
+    define_values = {"attestation": "off"},
+)
+
+alias(
+    name = "rustfmt",
+    actual = "@rules_rust//tools/upstream_wrapper:rustfmt",
+)
+
+alias(
+    name = "buildifier",
+    actual = "@buildifier_prebuilt//:buildifier",
+)
+
+format_multirun(
+    name = "format",
+    rust = ":rustfmt",
+    starlark = ":buildifier",
+)
+
+format_test(
+    name = "format_check",
+    no_sandbox = True,
+    rust = ":rustfmt",
+    starlark = ":buildifier",
+    workspace = "//:MODULE.bazel",
+)

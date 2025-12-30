@@ -1,0 +1,16 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "pvc.tee-llm.name" . }}
+  labels:
+    {{- include "pvc.tee-llm.labels" . | nindent 4 }}
+  namespace: {{ .Values.namespace }}
+spec:
+  type: {{ .Values.teeLlm.service.type }}
+  ports:
+    - port: {{ .Values.teeLlm.llmPort }}
+      targetPort: http
+      protocol: TCP
+      name: http
+  selector:
+    {{- include "pvc.tee-llm.selectorLabels" . | nindent 4 }}

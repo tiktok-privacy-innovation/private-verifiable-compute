@@ -1,0 +1,74 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "pvc.identity-server.name" . }}
+  labels:
+    {{- include "pvc.identity-server.labels" . | nindent 4 }}
+  namespace: {{ .Values.namespace }}
+spec:
+  {{- if not .Values.identityServer.autoscaling.enabled }}
+  replicas: {{ .Values.identityServer.replicaCount }}
+  {{- end }}
+  selector:
+    matchLabels:
+      {{- include "pvc.identity-server.selectorLabels" . | nindent 6 }}
+  template:
+    metadata:
+      {{- with .Values.identityServer.podAnnotations }}
+      annotations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      labels:
+        {{- include "pvc.identity-server.labels" . | nindent 8 }}
+        {{- with .Values.identityServer.podLabels }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+    spec:
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      serviceAccountName: {{ include "pvc.identity-server.serviceAccountName" . }}
+      securityContext:
+        {{- toYaml .Values.podSecurityContext | nindent 8 }}
+      containers:
+        - name: {{ .Chart.Name }}
+          securityContext:
+            {{- toYaml .Values.identityServer.securityContext | nindent 12 }}
+          image: "{{ .Values.identityServer.image.repository }}:{{ .Values.identityServer.image.tag | default .Chart.AppVersion }}"
+          imagePullPolicy: {{ .Values.identityServer.image.pullPolicy }}
+          env:
+          - name: OAUTH_TYPE
+            value: {{ .Values.oauth.oauthType }}
+          - name: GOOGLE_OAUTH_CLIENT_ID
+            value: {{ .Values.oauth.googleOauthClientId }}
+          ports:
+            - name: http
+              containerPort: {{ .Values.identityServer.service.port }}
+              protocol: TCP
+          livenessProbe:
+            {{- toYaml .Values.identityServer.livenessProbe | nindent 12 }}
+          readinessProbe:
+            {{- toYaml .Values.identityServer.readinessProbe | nindent 12 }}
+          resources:
+            {{- toYaml .Values.identityServer.resources | nindent 12 }}
+          {{- with .Values.identityServer.volumeMounts }}
+          volumeMounts:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+      {{- with .Values.identityServer.volumes }}
+      volumes:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.identityServer.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.identityServer.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.identityServer.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}

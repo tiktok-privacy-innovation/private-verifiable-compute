@@ -1,0 +1,121 @@
+# Copyright 2025 TikTok Inc. and/or its affiliates
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     https://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+load("@crates//:defs.bzl", "all_crate_deps")
+load("@rules_oci//oci:defs.bzl", "oci_image", "oci_load")
+load("@rules_pkg//pkg:mappings.bzl", "pkg_files")
+load("@rules_pkg//pkg:tar.bzl", "pkg_tar")
+load("@rules_rust//rust:defs.bzl", "rust_binary")
+
+rust_binary(
+    name = "pvc-client",
+    srcs = [
+        "src/auth.rs",
+        "src/client.rs",
+        "src/key.rs",
+        "src/main.rs",
+        "src/server.rs",
+    ],
+    crate_features = select({
+        "//:feat_attestation_off": [],
+        "//conditions:default": ["attestation"],
+    }),
+    edition = "2024",
+    proc_macro_deps = all_crate_deps(
+        proc_macro = True,
+    ),
+    deps = [
+        "//common/blind-rsa:blind_rsa",
+        "//common/identity",
+        "//common/noise",
+        "//common/oauth",
+        "//common/ohttp:ohttp_wrap",
+        "//common/types",
+        "@crates//:anyhow",
+        "@crates//:base64",
+        "@crates//:bincode",
+        "@crates//:hex",
+        "@crates//:p256",
+        "@crates//:rand",
+        "@crates//:rocket",
+        "@crates//:serde",
+        "@crates//:serde_json",
+        "@crates//:sha2",
+        "@crates//:tokio",
+        "@crates//:tracing",
+        "@crates//:tracing-subscriber",
+        "@crates//:uuid",
+    ] + select({
+        "//:feat_attestation_off": [],
+        "//conditions:default": ["@crates//:verifier"],
+    }),
+)
+
+filegroup(
+    name = "static_files",
+    srcs = glob(["static/**"]),
+    visibility = ["//visibility:public"],
+)
+
+pkg_files(
+    name = "static",
+    srcs = [":static_files"],
+    prefix = "static",
+    strip_prefix = "static",
+)
+
+filegroup(
+    name = "sgx_conf_src",
+    srcs = ["sgx_default_qcnl.conf"],
+)
+
+pkg_files(
+    name = "sgx_conf_pkg",
+    srcs = [":sgx_conf_src"],
+    prefix = "etc",
+)
+
+pkg_tar(
+    name = "sgx_conf_tar",
+    srcs = [":sgx_conf_pkg"],
+)
+
+pkg_tar(
+    name = "tar",
+    srcs = [
+        ":Rocket.toml",
+        ":pvc-client",
+        ":static",
+    ],
+)
+
+oci_image(
+    name = "image",
+    base = "@distroless_cc",
+    entrypoint = ["/pvc-client"],
+    tars = [
+        ":tar",
+        "@jammy//:flat",
+        "@bookworm//:flat",
+        ":sgx_conf_tar",
+    ],
+    visibility = ["//visibility:public"],
+)
+
+oci_load(
+    name = "load_image",
+    image = ":image",
+    repo_tags = ["pvc-client:latest"],
+    visibility = ["//visibility:public"],
+)

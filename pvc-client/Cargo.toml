@@ -1,0 +1,35 @@
+[package]
+name = "pvc-client"
+version = "0.1.0"
+license = "Apache-2.0"
+edition.workspace = true
+
+[features]
+default = ["attestation"]
+attestation = [ "dep:verifier" ]
+
+[dependencies]
+async-trait =  { workspace = true }
+anyhow = { workspace = true }
+tracing = { workspace = true }
+tokio = { workspace = true }
+types = { workspace = true }
+blind-rsa = { workspace = true }
+identity = { workspace = true }
+bincode = { workspace = true }
+base64 = { workspace = true }
+ohttp_wrap = { workspace = true }
+hex = { workspace = true }
+futures-util = { workspace = true }
+futures = { workspace = true }
+sha2 = { workspace = true }
+noise = { workspace = true }
+rand = { workspace = true }
+tracing-subscriber = { workspace = true }
+serde_json = { workspace = true }
+serde = { workspace = true }
+rocket = { workspace = true }
+p256 = { workspace = true }
+oauth = { workspace = true }
+
+verifier = { git = "https://github.com/confidential-containers/trustee", rev = "6d1dcfb", features = ["tdx-verifier", "nvidia-verifier"], optional = true}
