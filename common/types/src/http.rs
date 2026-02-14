@@ -21,7 +21,6 @@ pub use reqwest::{
     header::{HeaderMap, HeaderValue},
 };
 use serde::de::DeserializeOwned;
-use tracing::debug;
 
 /// A wrapper around `reqwest::Client`
 #[derive(Clone)]
@@ -55,18 +54,18 @@ impl HttpClient {
             None => builder,
         };
         let response = builder.send().await?;
-        ok_or_error(response).await
+        Ok(response)
     }
 
     pub async fn get<U: IntoUrl, V: DeserializeOwned>(
         &self,
         url: U,
         headers: Option<HeaderMap>,
-    ) -> Result<V, ApiError> {
+    ) -> Result<Option<V>, ApiError> {
         let response = self.get_with_raw_response(url, headers).await?;
         let body = response.bytes().await?;
         let api_resp: ApiResponse<V> = serde_json::from_slice(&body)?;
-        api_resp.into_data_or()
+        api_resp.data()
     }
 
     /// Perform a HTTP POST request.
@@ -82,7 +81,7 @@ impl HttpClient {
             None => builder,
         };
         let response = builder.body(body.to_vec()).send().await?;
-        ok_or_error(response).await
+        Ok(response)
     }
 
     pub async fn post<U: IntoUrl, V: DeserializeOwned>(
@@ -90,33 +89,10 @@ impl HttpClient {
         url: U,
         body: &[u8],
         headers: Option<HeaderMap>,
-    ) -> Result<V, ApiError> {
+    ) -> Result<Option<V>, ApiError> {
         let response = self.post_with_raw_response(url, body, headers).await?;
         let body = response.bytes().await?;
         let api_resp: ApiResponse<V> = serde_json::from_slice(&body)?;
-        api_resp.into_data_or()
-    }
-}
-
-/// Returns `Ok(response)` if the response is a `200 OK` response or a
-/// `202 Accepted` response. Otherwise, creates an appropriate error message.
-async fn ok_or_error(response: Response) -> Result<Response, ApiError> {
-    let status = response.status();
-    if status == StatusCode::OK
-        || status == StatusCode::ACCEPTED
-        || status == StatusCode::NO_CONTENT
-    {
-        Ok(response)
-    } else if let Ok(resp) = response.json::<ApiResponse<()>>().await {
-        debug!(
-            "request failed: code={}, message={}",
-            resp.code, resp.message,
-        );
-        Err(ApiError::InternalError {
-            code: resp.code,
-            message: resp.message,
-        })
-    } else {
-        Err(ApiError::HttpStatus(status))
+        api_resp.data()
     }
 }

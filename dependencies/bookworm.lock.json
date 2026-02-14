@@ -34,9 +34,9 @@
 					"version": "1.5.4+dfsg2-5"
 				},
 				{
-					"key": "libssl3_3.0.17-1_deb12u3_amd64",
+					"key": "libssl3_3.0.18-1_deb12u1_amd64",
 					"name": "libssl3",
-					"version": "3.0.17-1~deb12u3"
+					"version": "3.0.18-1~deb12u1"
 				},
 				{
 					"key": "libssh2-1_1.10.0-3-p-b1_amd64",
@@ -236,13 +236,13 @@
 		{
 			"arch": "amd64",
 			"dependencies": [],
-			"key": "libssl3_3.0.17-1_deb12u3_amd64",
+			"key": "libssl3_3.0.18-1_deb12u1_amd64",
 			"name": "libssl3",
-			"sha256": "49a24ea92f19ee029e694107cfcf4f7e6298883a28e23a80ec999a0746d4a869",
+			"sha256": "4eaee9db5a113b991a72eefe41965400a1efc97a560678edb5ddd978ccc8b083",
 			"urls": [
-				"https://security.debian.org/debian-security/pool/updates/main/o/openssl/libssl3_3.0.17-1~deb12u3_amd64.deb"
+				"https://deb.debian.org/debian/pool/main/o/openssl/libssl3_3.0.18-1~deb12u1_amd64.deb"
 			],
-			"version": "3.0.17-1~deb12u3"
+			"version": "3.0.18-1~deb12u1"
 		},
 		{
 			"arch": "amd64",
@@ -552,19 +552,19 @@
 					"version": "3.134"
 				},
 				{
-					"key": "passwd_1-4.13-p-dfsg1-1-p-deb12u1_amd64",
+					"key": "passwd_1-4.13-p-dfsg1-1-p-deb12u2_amd64",
 					"name": "passwd",
-					"version": "1:4.13+dfsg1-1+deb12u1"
+					"version": "1:4.13+dfsg1-1+deb12u2"
 				},
 				{
-					"key": "libpam-modules_1.5.2-6-p-deb12u1_amd64",
+					"key": "libpam-modules_1.5.2-6-p-deb12u2_amd64",
 					"name": "libpam-modules",
-					"version": "1.5.2-6+deb12u1"
+					"version": "1.5.2-6+deb12u2"
 				},
 				{
-					"key": "libpam-modules-bin_1.5.2-6-p-deb12u1_amd64",
+					"key": "libpam-modules-bin_1.5.2-6-p-deb12u2_amd64",
 					"name": "libpam-modules-bin",
-					"version": "1.5.2-6+deb12u1"
+					"version": "1.5.2-6+deb12u2"
 				},
 				{
 					"key": "libselinux1_3.4-1-p-b6_amd64",
@@ -577,9 +577,9 @@
 					"version": "10.42-1"
 				},
 				{
-					"key": "libpam0g_1.5.2-6-p-deb12u1_amd64",
+					"key": "libpam0g_1.5.2-6-p-deb12u2_amd64",
 					"name": "libpam0g",
-					"version": "1.5.2-6+deb12u1"
+					"version": "1.5.2-6+deb12u2"
 				},
 				{
 					"key": "debconf_1.5.82_amd64",
@@ -642,9 +642,9 @@
 					"version": "1.5.4+dfsg2-5"
 				},
 				{
-					"key": "libssl3_3.0.17-1_deb12u3_amd64",
+					"key": "libssl3_3.0.18-1_deb12u1_amd64",
 					"name": "libssl3",
-					"version": "3.0.17-1~deb12u3"
+					"version": "3.0.18-1~deb12u1"
 				},
 				{
 					"key": "liblzma5_5.4.1-1_amd64",
@@ -652,9 +652,9 @@
 					"version": "5.4.1-1"
 				},
 				{
-					"key": "libcap2_1-2.66-4-p-deb12u2_amd64",
+					"key": "libcap2_1-2.66-4-p-deb12u2-p-b2_amd64",
 					"name": "libcap2",
-					"version": "1:2.66-4+deb12u2"
+					"version": "1:2.66-4+deb12u2+b2"
 				},
 				{
 					"key": "libblkid1_2.38.1-5-p-deb12u3_amd64",
@@ -847,9 +847,9 @@
 					"version": "1.0.9-2+b6"
 				},
 				{
-					"key": "libssl-dev_3.0.17-1_deb12u3_amd64",
+					"key": "libssl-dev_3.0.18-1_deb12u1_amd64",
 					"name": "libssl-dev",
-					"version": "3.0.17-1~deb12u3"
+					"version": "3.0.18-1~deb12u1"
 				},
 				{
 					"key": "libjson-c-dev_0.16-2_amd64",
@@ -928,35 +928,35 @@
 		{
 			"arch": "amd64",
 			"dependencies": [],
-			"key": "passwd_1-4.13-p-dfsg1-1-p-deb12u1_amd64",
+			"key": "passwd_1-4.13-p-dfsg1-1-p-deb12u2_amd64",
 			"name": "passwd",
-			"sha256": "bf6fc6e59a5452113d9d582d100d289654914d2b4bd8f2c177f8ef814a3947ed",
+			"sha256": "fb787363372903e03627e53fd483e51dfb6861047a1e02c7d5a5f27d66546d08",
 			"urls": [
-				"https://deb.debian.org/debian/pool/main/s/shadow/passwd_4.13+dfsg1-1+deb12u1_amd64.deb"
+				"https://deb.debian.org/debian/pool/main/s/shadow/passwd_4.13+dfsg1-1+deb12u2_amd64.deb"
 			],
-			"version": "1:4.13+dfsg1-1+deb12u1"
+			"version": "1:4.13+dfsg1-1+deb12u2"
 		},
 		{
 			"arch": "amd64",
 			"dependencies": [],
-			"key": "libpam-modules_1.5.2-6-p-deb12u1_amd64",
+			"key": "libpam-modules_1.5.2-6-p-deb12u2_amd64",
 			"name": "libpam-modules",
-			"sha256": "851d270e36707787ab1cd269dbd9597864feaf3f8453ecd3c426caaa56142222",
+			"sha256": "19fb4838168e68bc15a5606070f14b1162bb34a3899686913f5d661f1707f483",
 			"urls": [
-				"https://deb.debian.org/debian/pool/main/p/pam/libpam-modules_1.5.2-6+deb12u1_amd64.deb"
+				"https://deb.debian.org/debian/pool/main/p/pam/libpam-modules_1.5.2-6+deb12u2_amd64.deb"
 			],
-			"version": "1.5.2-6+deb12u1"
+			"version": "1.5.2-6+deb12u2"
 		},
 		{
 			"arch": "amd64",
 			"dependencies": [],
-			"key": "libpam-modules-bin_1.5.2-6-p-deb12u1_amd64",
+			"key": "libpam-modules-bin_1.5.2-6-p-deb12u2_amd64",
 			"name": "libpam-modules-bin",
-			"sha256": "fc6a692d2f399b83ef5a7f310883286a5e4326095812d8bb934925125002981c",
+			"sha256": "e7b1f6c60a51398920c5da792016161a65bf1c7caaa64140dd2099176ed51280",
 			"urls": [
-				"https://deb.debian.org/debian/pool/main/p/pam/libpam-modules-bin_1.5.2-6+deb12u1_amd64.deb"
+				"https://deb.debian.org/debian/pool/main/p/pam/libpam-modules-bin_1.5.2-6+deb12u2_amd64.deb"
 			],
-			"version": "1.5.2-6+deb12u1"
+			"version": "1.5.2-6+deb12u2"
 		},
 		{
 			"arch": "amd64",
@@ -983,13 +983,13 @@
 		{
 			"arch": "amd64",
 			"dependencies": [],
-			"key": "libpam0g_1.5.2-6-p-deb12u1_amd64",
+			"key": "libpam0g_1.5.2-6-p-deb12u2_amd64",
 			"name": "libpam0g",
-			"sha256": "e360be5f17f9c09c8f17bae809f6c6f091c5bb6ab1a44fc33e4fb86c5e5559df",
+			"sha256": "a06f889caf9e97ccf04dedec0905573916bc6ec3366ade2c6ef8900047fd5cc1",
 			"urls": [
-				"https://deb.debian.org/debian/pool/main/p/pam/libpam0g_1.5.2-6+deb12u1_amd64.deb"
+				"https://deb.debian.org/debian/pool/main/p/pam/libpam0g_1.5.2-6+deb12u2_amd64.deb"
 			],
-			"version": "1.5.2-6+deb12u1"
+			"version": "1.5.2-6+deb12u2"
 		},
 		{
 			"arch": "amd64",
@@ -1115,13 +1115,13 @@
 		{
 			"arch": "amd64",
 			"dependencies": [],
-			"key": "libcap2_1-2.66-4-p-deb12u2_amd64",
+			"key": "libcap2_1-2.66-4-p-deb12u2-p-b2_amd64",
 			"name": "libcap2",
-			"sha256": "8b005538db1c85728bcc2199810da06de5e1e15fb02b83f1006537622a229875",
+			"sha256": "b3bc4be75e2c90f544474c20766066d093c0ee55181f9a6807b1568e6266d119",
 			"urls": [
-				"https://deb.debian.org/debian/pool/main/libc/libcap2/libcap2_2.66-4+deb12u2_amd64.deb"
+				"https://deb.debian.org/debian/pool/main/libc/libcap2/libcap2_2.66-4+deb12u2+b2_amd64.deb"
 			],
-			"version": "1:2.66-4+deb12u2"
+			"version": "1:2.66-4+deb12u2+b2"
 		},
 		{
 			"arch": "amd64",
@@ -1269,13 +1269,13 @@
 		{
 			"arch": "amd64",
 			"dependencies": [],
-			"key": "libssl-dev_3.0.17-1_deb12u3_amd64",
+			"key": "libssl-dev_3.0.18-1_deb12u1_amd64",
 			"name": "libssl-dev",
-			"sha256": "b4a236c13a5b905fdd272c8a122b7644dfb881c1bfb8a4291e32f48ead551bdf",
+			"sha256": "81fc8d4529f0c0224540c11ff6c0cee75280a487877fb7dc315e5933d1500ed0",
 			"urls": [
-				"https://security.debian.org/debian-security/pool/updates/main/o/openssl/libssl-dev_3.0.17-1~deb12u3_amd64.deb"
+				"https://deb.debian.org/debian/pool/main/o/openssl/libssl-dev_3.0.18-1~deb12u1_amd64.deb"
 			],
-			"version": "3.0.17-1~deb12u3"
+			"version": "3.0.18-1~deb12u1"
 		},
 		{
 			"arch": "amd64",

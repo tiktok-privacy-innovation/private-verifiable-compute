@@ -17,5 +17,12 @@ kbs-types = { workspace = true }
 sha2 = { workspace = true }
 hex = { workspace = true }
 rocket = { workspace = true }
+futures = { workspace = true }
+bytes = { workspace = true }
+futures-util = { workspace = true }
+num_enum = { workspace = true }
+
+
 [dev-dependencies]
 rand_core = { workspace = true }
+tokio = { workspace = true, features = ["full"] }

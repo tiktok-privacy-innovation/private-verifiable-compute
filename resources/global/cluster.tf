@@ -66,7 +66,7 @@ resource "google_container_node_pool" "pvc_node_pool_gpu" {
       type  = var.gpu_type
       count = var.gpu_count
       gpu_driver_installation_config {
-        gpu_driver_version = "INSTALLATION_DISABLED"
+        gpu_driver_version = "LATEST"
       }
     }
     reservation_affinity {

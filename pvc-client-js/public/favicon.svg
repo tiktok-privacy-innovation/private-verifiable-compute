@@ -1,0 +1,13 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32" fill="none">
+  <defs>
+    <linearGradient id="bg" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" style="stop-color:#2563eb"/>
+      <stop offset="100%" style="stop-color:#1d4ed8"/>
+    </linearGradient>
+  </defs>
+  <!-- Shield = protection / verifiable -->
+  <path fill="url(#bg)" d="M16 2L4 7v8c0 7 5 11 12 14 7-3 12-7 12-14V7L16 2z"/>
+  <!-- Lock = privacy -->
+  <rect x="12" y="13" width="8" height="6" rx="1" fill="white" opacity="0.95"/>
+  <path d="M11 13V11a5 5 0 0 1 10 0v2" stroke="white" stroke-width="1.5" fill="none" stroke-linecap="round"/>
+</svg>

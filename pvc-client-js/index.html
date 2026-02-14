@@ -1,0 +1,215 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>PVC — Private Verifiable Compute</title>
+    <meta name="description" content="Privacy-preserving AI inference. GPU TEE, OHTTP, and end-to-end encryption so your data is only decrypted in the enclave." />
+    <link rel="icon" href="/favicon.svg" type="image/svg+xml" />
+    <link rel="apple-touch-icon" href="/favicon.svg" />
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet" />
+    <link rel="stylesheet" href="/landing.css" />
+  </head>
+  <body>
+    <div class="site">
+      <header class="nav">
+        <a class="brand" href="/">
+          <span class="logo">PVC</span>
+          <span class="brand-text">Private Verifiable Compute</span>
+        </a>
+        <nav class="nav-links">
+          <a class="nav-link" href="#features">Features</a>
+          <a class="nav-link" href="#demos">Demos</a>
+          <a class="nav-link" href="#contact">Contact</a>
+          <a class="btn btn-primary" href="/chat/">Chat Demo</a>
+          <span class="nav-soon">AI Private Editor <em>Coming soon</em></span>
+        </nav>
+      </header>
+
+      <main>
+        <section class="hero">
+          <div class="hero-inner">
+            <h1 class="hero-title">Private Verifiable Compute</h1>
+            <p class="hero-tagline">Enabling private AI processing.</p>
+            <p class="hero-desc">
+              Confidential AI inference by design. Models run in attested GPU TEEs; from the browser, OHTTP anonymizes your identity and end-to-end encryption keeps your data sealed until decryption inside the enclave—and nowhere else.
+            </p>
+            <div class="hero-actions">
+              <a class="btn btn-primary btn-lg" href="/chat/">Try Chat Demo</a>
+              <a class="btn btn-outline btn-lg" href="#features">How it works</a>
+            </div>
+          </div>
+          <div class="hero-visual" aria-hidden="true">
+            <div class="visual-orb"></div>
+            <div class="visual-badge visual-badge-tee">GPU TEE</div>
+            <div class="visual-badge visual-badge-e2e">E2E</div>
+            <div class="visual-badge visual-badge-ohttp">OHTTP</div>
+            <div class="visual-badge visual-badge-verify">Verifiable transparency</div>
+            <div class="visual-badge visual-badge-zero">No privilege access</div>
+          </div>
+        </section>
+
+        <section id="features" class="section features">
+          <h2 class="section-title">Why PVC</h2>
+          <p class="section-sub">Three guarantees for confidential AI.</p>
+          <div class="feature-grid">
+            <article class="feature">
+              <div class="feature-head">OHTTP</div>
+              <h3 class="feature-title">IP and identity protection</h3>
+              <p class="feature-p">Traffic is relayed so your IP and the AI service are never linked. Identity is decoupled from every request.</p>
+            </article>
+            <article class="feature">
+              <div class="feature-head">End-to-end encryption</div>
+              <h3 class="feature-title">Sealed until the enclave</h3>
+              <p class="feature-p">Data stays encrypted from the browser through the network and is only decrypted inside the attested TEE.</p>
+            </article>
+            <article class="feature">
+              <div class="feature-head">GPU TEE</div>
+              <h3 class="feature-title">Verifiable execution</h3>
+              <p class="feature-p">AI inference runs in hardware-isolated, attested enclaves. Remote attestation proves the environment before any decryption.</p>
+            </article>
+          </div>
+        </section>
+
+        <section class="section trust">
+          <h2 class="section-title">Trust, verified</h2>
+          <p class="section-sub">Hardware-rooted guarantees.</p>
+          <div class="trust-grid">
+            <div class="trust-item">
+              <h3>Attestation first</h3>
+              <p>Clients verify enclave identity and policy before sending data. No trust without proof.</p>
+            </div>
+            <div class="trust-item">
+              <h3>Zero-access design</h3>
+              <p>Operators and infrastructure never see plaintext prompts or model outputs.</p>
+            </div>
+          </div>
+        </section>
+
+        <section id="demos" class="section demos">
+          <h2 class="section-title">Demos</h2>
+          <p class="section-sub">Try PVC in the browser.</p>
+          <div class="demo-grid">
+            <a class="demo-card" href="/chat/">
+              <span class="demo-label">Chat</span>
+              <h3>Private Chat</h3>
+              <p>Talk to an AI model over an encrypted tunnel. Your IP is protected; data is decrypted only in the TEE.</p>
+              <span class="demo-link">Launch demo →</span>
+            </a>
+            <div class="demo-card demo-card-soon">
+              <span class="demo-label">Editor</span>
+              <h3>AI Private Editor</h3>
+              <p>Code and edit with AI assistance while keeping everything private.</p>
+              <span class="demo-link soon">Coming soon</span>
+            </div>
+          </div>
+        </section>
+
+        <section id="contact" class="section contact">
+          <h2 class="section-title">Contact</h2>
+          <p class="section-sub">Reach out via the contacts below.</p>
+          <div class="contact-table">
+            <div class="contact-table-header">
+              <div class="contact-col-team">Team</div>
+              <div class="contact-col-contacts">Contacts</div>
+            </div>
+            <div class="contact-team-row">
+              <div class="contact-col-team contact-team-name"></div>
+              <div class="contact-col-contacts contact-contacts">
+                <div class="contact-group" data-contact-role="PoC">
+                  <span class="contact-group-label">PoC</span>
+                  <div class="contact-list"></div>
+                </div>
+                <div class="contact-group" data-contact-role="R&D">
+                  <span class="contact-group-label">R&D</span>
+                  <div class="contact-list"></div>
+                </div>
+              </div>
+            </div>
+          </div>
+        </section>
+
+        <section class="cta">
+          <div class="cta-inner">
+            <h2>Start with PVC</h2>
+            <p>Run the chat demo or integrate the secure gateway into your stack.</p>
+            <a class="btn btn-primary btn-lg" href="/chat/">Launch Chat Demo</a>
+          </div>
+        </section>
+      </main>
+
+      <footer class="footer">
+        <div class="footer-inner">
+          <a class="brand" href="/">
+            <span class="logo">PVC</span>
+            <span class="brand-text">Private Verifiable Compute</span>
+          </a>
+          <div class="footer-links">
+            <a href="#features">Features</a>
+            <a href="#demos">Demos</a>
+            <a href="#contact">Contact</a>
+            <a href="/chat/">Chat Demo</a>
+          </div>
+          <p class="footer-copy">© 2026 PVC. All rights reserved.</p>
+        </div>
+      </footer>
+    </div>
+    <script>
+      (function () {
+        var teamEl = document.querySelector('.contact-team-name');
+        var groupEls = document.querySelectorAll('.contact-group[data-contact-role]');
+        fetch('/contacts/README.md').then(function (res) {
+          if (!res.ok) return Promise.reject();
+          return res.text();
+        }).then(function (text) {
+          if (!text || typeof text !== 'string') return;
+          var lines = text.split(/\r?\n/);
+          var firstLine = lines.find(function (line) { return line.trim().length > 0 && line.trim().indexOf('|') !== 0; });
+          if (teamEl && firstLine) teamEl.textContent = firstLine.trim();
+          var contacts = [];
+          var rowRe = /\|\s*([^|\s]+\.(?:jpg|png|jpeg|gif|webp))\s*\|\s*([^|]+)\|(?:\s*([^|]*)\|)?/;
+          lines.forEach(function (line) {
+            var m = line.match(rowRe);
+            if (!m) return;
+            var file = m[1].trim();
+            var name = m[2].trim();
+            var role = (m[3] && m[3].trim()) ? m[3].trim() : 'R&D';
+            if (role.toLowerCase() === 'poc') role = 'PoC';
+            else if (role.toLowerCase() === 'r&d') role = 'R&D';
+            contacts.push({ file: file, name: name, role: role });
+          });
+          function initialsFromName(n) {
+            return n.split(/\s+/).map(function (w) { return (w[0] || '').toUpperCase(); }).join('').slice(0, 2);
+          }
+          var listByRole = {};
+          groupEls.forEach(function (g) {
+            var role = g.getAttribute('data-contact-role');
+            var list = g.querySelector('.contact-list');
+            if (role && list) listByRole[role] = list;
+          });
+          contacts.forEach(function (c) {
+            var list = listByRole[c.role];
+            if (!list) list = listByRole['R&D'] || listByRole['PoC'];
+            if (!list) return;
+            var item = document.createElement('div');
+            item.className = 'contact-item';
+            var avatarPath = '/contacts/' + c.file;
+            item.innerHTML =
+              '<div class="contact-avatar">' +
+              '<img src="' + avatarPath + '" alt="" onerror="this.style.display=\'none\'">' +
+              '<span class="contact-avatar-initials"></span></div>' +
+              '<span class="contact-name"></span>';
+            var avatar = item.querySelector('.contact-avatar');
+            var initSpan = item.querySelector('.contact-avatar-initials');
+            var nameSpan = item.querySelector('.contact-name');
+            initSpan.textContent = initialsFromName(c.name);
+            nameSpan.textContent = c.name;
+            list.appendChild(item);
+          });
+        }).catch(function () {});
+      })();
+    </script>
+  </body>
+</html>

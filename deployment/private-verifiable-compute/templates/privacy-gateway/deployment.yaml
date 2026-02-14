@@ -39,6 +39,8 @@ spec:
           image: "{{ .Values.privacyGateway.image.repository }}:{{ .Values.privacyGateway.image.tag | default .Chart.AppVersion }}"
           imagePullPolicy: {{ .Values.privacyGateway.image.pullPolicy }}
           env:
+            - name: REQUEST_TIMEOUT
+              value: "3600"
             - name: ALLOWED_TARGET_ORIGINS
               valueFrom:
                 configMapKeyRef:

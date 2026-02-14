@@ -21,14 +21,33 @@ package(default_visibility = ["//visibility:public"])
 
 rust_binary(
     name = "pvc-ohttp-gateway",
-    srcs = ["src/main.rs"],
+    srcs = [
+        "src/handlers.rs",
+        "src/main.rs",
+    ],
+    crate_features = [
+        "base64",
+    ],
     edition = "2024",
     proc_macro_deps = all_crate_deps(
         proc_macro = True,
     ),
-    deps = all_crate_deps(
-        normal = True,
-    ),
+    deps = [
+        "//common/ohttp:ohttp_wrap",
+        "//common/types",
+        "@crates//:axum",
+        "@crates//:base64",
+        "@crates//:bytes",
+        "@crates//:futures",
+        "@crates//:hyper",
+        "@crates//:ohttp-gateway",
+        "@crates//:reqwest",
+        "@crates//:tokio",
+        "@crates//:tower",
+        "@crates//:tower-http",
+        "@crates//:tracing",
+        "@crates//:tracing-subscriber",
+    ],
 )
 
 pkg_tar(

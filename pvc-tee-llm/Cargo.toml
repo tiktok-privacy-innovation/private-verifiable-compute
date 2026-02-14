@@ -5,9 +5,9 @@ license = "Apache-2.0"
 edition.workspace = true
 
 [features]
-default = ["attestation", "sqlite"]
-attestation = ["dep:attester"]
-sqlite = [ "dep:rusqlite", "dep:sqlite-vec" ]
+default = ["sqlite", "noise"]
+sqlite = ["dep:rusqlite", "dep:sqlite-vec"]
+noise = []
 
 [dependencies]
 rocket = { workspace = true }
@@ -33,15 +33,31 @@ hex = { workspace = true }
 reqwest = { workspace = true }
 regex = "1.12.2"
 handlebars = "6.3.2"
-
-attester = { git = "https://github.com/confidential-containers/guest-components", features = ["tdx-attester", "nvidia-attester"], optional = true }
-rig-sqlite = "0.1.27"
-rig-core = { version = "0.24.0", default-features = false }
+futures = { workspace = true }
+bytes = { workspace = true }
+attester = { git = "https://github.com/confidential-containers/guest-components", features = [
+  "tdx-attester",
+  "nvidia-attester",
+] }
+rig-sqlite = "0.1.32"
+rig-core = { version = "0.29.0", default-features = false }
 lru = "0.16"
 rusqlite = { version = "0.32", optional = true }
-sqlite-vec = {version = "0.1", optional = true }
+sqlite-vec = { version = "0.1", optional = true }
 tokio-rusqlite = { version = "0.6.0", default-features = false }
 thiserror = { version = "2.0.17" }
-redis = { version = "1.0.1", features = ["tokio-comp", "cluster", "cluster-async", "json", "aio", "connection-manager"] }
+redis = { version = "1.0.1", features = [
+  "tokio-comp",
+  "cluster",
+  "cluster-async",
+  "json",
+  "aio",
+  "connection-manager",
+] }
 log = { version = "0.4" }
-nvml-wrapper = { version = "0.11.0", default-features = false, features = ["serde"] }
+nvml-wrapper = { version = "0.11.0", default-features = false, features = [
+  "serde",
+] }
+blind-rsa-signatures = { workspace = true }
+num-bigint-dig = "0.8.4"
+tokio-stream = "0.1.18"

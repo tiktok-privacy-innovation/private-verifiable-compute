@@ -269,6 +269,10 @@ URL Scheme
 {{ include "pvc.url" (dict "scheme" (default "http" .Values.teeLlm.urlScheme) "host" (include "pvc.tee-server.name" .) "port" .Values.teeLlm.service.port) }}
 {{- end -}}
 
+{{- define "pvc.tee-embedding.url" -}}
+{{ include "pvc.url" (dict "scheme" (default "http" .Values.teeLlm.urlScheme) "host" (include "pvc.tee-embedding.name" .) "port" .Values.teeLlm.embeddingPort) }}
+{{- end -}}
+
 {{- define "pvc.target.url" -}}
 {{ include "pvc.tee-server.name" .}}:{{ .Values.teeLlm.service.port }}
 {{- end -}}

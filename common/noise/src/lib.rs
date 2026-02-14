@@ -20,8 +20,11 @@
 ///
 /// Responder flow:
 /// 1) recv_init_and_respond(inbound) -> reads e, writes e, ee, and returns Transport
-use anyhow::{Result, bail};
+use anyhow::{Result, anyhow, bail};
 use snow::{Builder, HandshakeState, TransportState, params::NoiseParams};
+
+pub const NONCELEN: usize = 8;
+pub const TAGLEN: usize = 16;
 
 /// Session role for NN.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -79,19 +82,164 @@ pub struct NoiseNnTransport {
     inner: TransportState,
 }
 
+const MAX_CHUNK_SIZE: usize = 65535 - NONCELEN - TAGLEN;
+const NN_HEADER_SIZE: usize = 8;
+
 impl NoiseNnTransport {
-    pub fn encrypt(&mut self, pt: &[u8]) -> Result<Vec<u8>> {
-        let mut out = vec![0u8; pt.len() + 32];
-        let n = self.inner.write_message(pt, &mut out)?;
-        out.truncate(n);
+    fn calculate_sizes(msg_size: usize, header_size: usize) -> (usize, usize) {
+        let num_chunks = (msg_size + MAX_CHUNK_SIZE - 1) / MAX_CHUNK_SIZE;
+        let mut output_size: usize = header_size;
+        output_size += num_chunks * (NONCELEN + TAGLEN) + msg_size;
+        (num_chunks, output_size)
+    }
+
+    fn fill_header(&self, msg_len: u32, num_packages: u32, header: &mut [u8]) {
+        assert_eq!(header.len(), NN_HEADER_SIZE);
+        let msg_len_bytes = msg_len.to_be_bytes();
+        let num_packages_bytes = num_packages.to_be_bytes();
+        header[0..4].copy_from_slice(&msg_len_bytes);
+        header[4..8].copy_from_slice(&num_packages_bytes);
+    }
+
+    fn take_header(&self, header: &[u8]) -> (u32, u32) {
+        assert_eq!(header.len(), NN_HEADER_SIZE);
+        let msg_len_bytes = &header[0..4];
+        let num_packages_bytes = &header[4..8];
+        let msg_len = u32::from_be_bytes([
+            msg_len_bytes[0],
+            msg_len_bytes[1],
+            msg_len_bytes[2],
+            msg_len_bytes[3],
+        ]);
+        let num_packages = u32::from_be_bytes([
+            num_packages_bytes[0],
+            num_packages_bytes[1],
+            num_packages_bytes[2],
+            num_packages_bytes[3],
+        ]);
+        (msg_len, num_packages)
+    }
+
+    /// require 0 < pt.len() < 2^16 * 65535
+    fn _encrypt(&mut self, pt: &[u8], attach_len: bool) -> Result<Vec<u8>> {
+        let msg_len = pt.len();
+        if msg_len >= (MAX_CHUNK_SIZE << 16) {
+            bail!("encrypt message too large");
+        }
+
+        let (num_chunks, output_size) = Self::calculate_sizes(msg_len, NN_HEADER_SIZE);
+        let (header_size, obuff_size) = if attach_len {
+            (NN_HEADER_SIZE + 4, output_size + 4)
+        } else {
+            (NN_HEADER_SIZE, output_size)
+        };
+
+        let mut out = vec![0u8; obuff_size];
+        let (header, mut chunks_ct) = out.split_at_mut(header_size);
+
+        if attach_len {
+            let (l, h) = header.split_at_mut(4);
+            l.copy_from_slice(&(output_size as u32).to_be_bytes());
+            self.fill_header(msg_len as u32, num_chunks as u32, h);
+        } else {
+            self.fill_header(msg_len as u32, num_chunks as u32, header);
+        }
+
+        for i in 0..num_chunks {
+            let start = i * MAX_CHUNK_SIZE;
+            let end = std::cmp::min(msg_len, start + MAX_CHUNK_SIZE);
+
+            let this_chunk_size = end - start;
+            let chunk_pt = &pt[start..end];
+
+            let (chunk_ct, remains) = chunks_ct.split_at_mut(this_chunk_size + NONCELEN + TAGLEN);
+            self.encrypt_one_chunk(chunk_pt, chunk_ct)
+                .map_err(|e| anyhow!("encrypt chunks failed at {} chunk for {} ", i, e))?;
+
+            chunks_ct = remains;
+        }
         Ok(out)
     }
 
+    /// encrypt the message via noise protocol
+    /// handling long messages by splitting them into chunks
+    /// output format: msg_len (4bytes) | num_chunks (4bytes) | chunk0 | ... | chunkN
+    pub fn encrypt(&mut self, pt: &[u8]) -> Result<Vec<u8>> {
+        self._encrypt(pt, /*attach_len*/ false)
+    }
+
+    /// encrypt the message and attach the ciphertext length in prefix (4 bytes)
+    /// the result can be parsed by tiko's LengthDelimitedCodec.
+    ///
+    /// ```
+    /// use tiko::codec::LengthDelimitedCodec;
+    ///
+    /// let ct = encrypt_with_prefix_len("message")?;
+    /// let mut codec = LengthDelimitedCodec::builder().length_delimiter(4).build().new_reader(ct);
+    /// codec.then(move |frame| {
+    ///    // the prefix field (4bytes) is already stripped
+    ///    decrypt(frame)
+    /// })
+    ///
+    /// ```
+    pub fn encrypt_with_prefix_len(&mut self, pt: &[u8]) -> Result<Vec<u8>> {
+        self._encrypt(pt, /*attach_len*/ true)
+    }
+
+    /// out format: nonce (8) + aead_cipher + tag (16)
+    fn encrypt_one_chunk(&mut self, pt: &[u8], out: &mut [u8]) -> Result<()> {
+        if pt.len() > MAX_CHUNK_SIZE {
+            bail!("encrypt message too large");
+        }
+        if out.len() != NONCELEN + pt.len() + TAGLEN {
+            bail!("output buffer size mismatch");
+        }
+
+        let (out_nonce, out_ct) = out.split_at_mut(NONCELEN);
+        let nonce = self.inner.sending_nonce();
+        out_nonce.copy_from_slice(&nonce.to_be_bytes());
+        let n = self.inner.write_message(pt, out_ct)?;
+        assert_eq!(n, out_ct.len());
+        Ok(())
+    }
+
+    /// the prefix length is **not included** in the header
     pub fn decrypt(&mut self, ct: &[u8]) -> Result<Vec<u8>> {
-        let mut out = vec![0u8; ct.len()];
-        let n = self.inner.read_message(ct, &mut out)?;
-        out.truncate(n);
+        let (header, mut chunks_ct) = ct.split_at(NN_HEADER_SIZE);
+        let (msg_len, num_chunks) = self.take_header(header);
+
+        let num_chunks = num_chunks as usize;
+        let msg_len = msg_len as usize;
+        if msg_len >= (MAX_CHUNK_SIZE << 16) {
+            bail!("invalid msg_len {} to decrypt", msg_len);
+        }
+
+        let ct_len = chunks_ct.len();
+        if ct_len != num_chunks * (TAGLEN + NONCELEN) + msg_len {
+            bail!("ciphertext length mismatch");
+        }
+
+        let mut out = vec![0u8; msg_len];
+        for i in 0..num_chunks {
+            let start = i * MAX_CHUNK_SIZE;
+            let end = std::cmp::min(msg_len, start + MAX_CHUNK_SIZE);
+            let this_chunk_size = end - start;
+
+            let (chunk_ct, rest) = chunks_ct.split_at(this_chunk_size + NONCELEN + TAGLEN);
+            self.decrypt_one_chunk(chunk_ct, &mut out[start..end])
+                .map_err(|e| anyhow!("decrypt chunks failed at {} chunk for {} ", i, e))?;
+            chunks_ct = rest;
+        }
         Ok(out)
+    }
+
+    fn decrypt_one_chunk(&mut self, ct: &[u8], out: &mut [u8]) -> Result<()> {
+        let (nonce, aead) = ct.split_at(NONCELEN);
+        let nonce = u64::from_be_bytes(nonce.try_into()?);
+        self.inner.set_receiving_nonce(nonce);
+        let n = self.inner.read_message(aead, out)?;
+        assert_eq!(n, out.len());
+        Ok(())
     }
 }
 
@@ -164,6 +312,11 @@ mod tests {
         let ct = init_transport.encrypt(pt)?;
         let dec = resp_transport.decrypt(&ct)?;
         assert_eq!(dec, pt);
+
+        let long_pt = [11u8; 65535 + 32768];
+        let long_ct = init_transport.encrypt(&long_pt)?;
+        let long_dec = resp_transport.decrypt(&long_ct)?;
+        assert_eq!(long_dec, long_pt);
         // Reverse direction: encrypt on responder, decrypt on initiator
         let pt2 = b"server -> client";
         let ct2 = resp_transport.encrypt(pt2)?;

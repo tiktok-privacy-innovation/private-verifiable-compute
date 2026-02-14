@@ -18,6 +18,7 @@ extern crate rocket;
 mod auth;
 mod client;
 mod key;
+mod resp;
 mod server;
 
 use client::PvcClient;
@@ -28,10 +29,13 @@ use types::utils::get_env_or_default;
 
 #[launch]
 async fn rocket() -> _ {
+    use tracing_subscriber::EnvFilter;
+
     tracing_subscriber::fmt()
         .with_target(true)
         .with_thread_ids(true)
         .with_thread_names(true)
+        .with_env_filter(EnvFilter::from_default_env())
         .init();
 
     let key = key::create_or_get_encryption_key().unwrap();
@@ -56,10 +60,11 @@ async fn rocket() -> _ {
         .manage(key)
         .manage(oauth_token)
         .mount("/", routes![server::health])
+        // OpenAI compatible
+        .mount("/v1", routes![server::chat_completions])
         .mount(
             "/api",
             routes![
-                server::inference,
                 server::attestation,
                 auth::auth_config,
                 auth::login_with_oauth_token,

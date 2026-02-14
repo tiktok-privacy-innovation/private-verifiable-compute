@@ -1,0 +1,680 @@
+/* Copyright 2025 Tiktok Inc. and/or its affiliates
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License. */
+
+/* Reset */
+* {
+  margin: 0;
+  padding: 0;
+  box-sizing: border-box;
+}
+
+body {
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "Roboto", "Oxygen", "Ubuntu", "Cantarell", "Fira Sans", "Droid Sans", "Helvetica Neue", sans-serif;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  background-color: #f7f9fc;
+}
+
+/* Layout */
+.pvc-app {
+  display: flex;
+  height: 100vh;
+  background: #f7f9fc;
+}
+
+.pvc-sidebar {
+  width: 260px;
+  background: #ffffff;
+  border-right: 1px solid #e2e8f0;
+  display: flex;
+  flex-direction: column;
+}
+
+.pvc-content {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  background: #ffffff;
+}
+
+/* Header */
+.pvc-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 16px 24px;
+  border-bottom: 1px solid #e2e8f0;
+  background: #ffffff;
+}
+
+.pvc-header-left {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.pvc-attestation-trigger {
+  position: relative;
+  cursor: default;
+}
+
+.pvc-status-icon {
+  width: 32px;
+  height: 32px;
+  border-radius: 8px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: #e0e7ff;
+  color: #1d4ed8;
+}
+
+.pvc-status-icon.connected {
+  background: #dcfce7;
+  color: #059669;
+}
+
+.pvc-header-text h1 {
+  font-size: 16px;
+  font-weight: 600;
+  color: #111827;
+  margin: 0;
+}
+
+.pvc-status-line {
+  display: flex;
+  align-items: baseline;
+  gap: 2px;
+  margin-top: 2px;
+}
+
+.pvc-status {
+  font-size: 12px;
+  color: #6b7280;
+}
+
+.pvc-status.connected {
+  color: #059669;
+}
+
+.pvc-status.pvc-status-error {
+  color: #b91c1c;
+  font-weight: 600;
+}
+
+.pvc-attestation-hint {
+  font-size: 11px;
+  color: #94a3b8;
+  font-weight: 400;
+}
+
+.pvc-attestation-popover {
+  position: absolute;
+  left: 0;
+  top: calc(100% + 8px);
+  z-index: 100;
+  min-width: 320px;
+  max-width: 420px;
+  background: #334155;
+  border-radius: 12px;
+  box-shadow: 0 12px 28px rgba(0, 0, 0, 0.25);
+  overflow: hidden;
+}
+
+.pvc-attestation-title {
+  padding: 12px 14px 10px;
+  font-size: 14px;
+  font-weight: 700;
+  color: #fff;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.12);
+}
+
+.pvc-attestation-fields {
+  padding: 8px 12px 10px;
+  overflow: hidden;
+}
+
+.pvc-attestation-row {
+  display: grid;
+  grid-template-columns: 100px 1fr;
+  align-items: center;
+  gap: 10px;
+  padding: 4px 0;
+  font-size: 11px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+}
+.pvc-attestation-row:last-child {
+  border-bottom: none;
+}
+
+.pvc-attestation-key {
+  color: rgba(255, 255, 255, 0.85);
+  flex-shrink: 0;
+}
+
+.pvc-attestation-val {
+  color: #fff;
+  text-align: right;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.pvc-attestation-active {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 14px;
+  background: #059669;
+  color: #fff;
+  font-size: 13px;
+  font-weight: 600;
+}
+.pvc-attestation-active .pvc-icon {
+  width: 18px;
+  height: 18px;
+}
+
+.pvc-error-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 12px;
+  border-radius: 9999px;
+  background: linear-gradient(180deg, #fef2f2 0%, #fee2e2 100%);
+  border: 1px solid #fecaca;
+  color: #b91c1c;
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 0.2px;
+  box-shadow: 0 6px 18px rgba(185, 28, 28, 0.12);
+}
+
+.pvc-error-badge .pvc-icon {
+  width: 16px;
+  height: 16px;
+}
+
+.pvc-error-badge .pvc-error-msg {
+  color: #b91c1c;
+}
+
+/* Sidebar */
+.pvc-sidebar-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 16px 20px;
+  border-bottom: 1px solid #e2e8f0;
+}
+
+.pvc-sidebar-title {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 14px;
+  font-weight: 600;
+  color: #111827;
+}
+
+.pvc-button.mini {
+  background: none;
+  border: 1px solid #d1d5db;
+  border-radius: 6px;
+  padding: 6px;
+  cursor: pointer;
+  color: #6b7280;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.pvc-button.mini:hover {
+  background: #f3f4f6;
+}
+
+.pvc-sidebar-tip {
+  font-size: 12px;
+  color: #9ca3af;
+  padding: 0 20px 12px;
+}
+
+.pvc-session-list {
+  flex: 1;
+  overflow-y: auto;
+  padding: 8px 16px;
+}
+
+.pvc-session-empty {
+  border: 1px dashed #cbd5e1;
+  border-radius: 8px;
+  padding: 16px;
+  text-align: center;
+  font-size: 13px;
+  color: #64748b;
+  margin: 8px 0;
+}
+
+.pvc-session-item {
+  width: 100%;
+  text-align: left;
+  background: none;
+  border: 1px solid #e2e8f0;
+  border-radius: 8px;
+  padding: 10px 12px;
+  margin-bottom: 8px;
+  cursor: pointer;
+  font-size: 13px;
+  color: #475569;
+}
+
+.pvc-session-item.active {
+  background: #eef2ff;
+  border-color: #c7d2fe;
+  color: #1d4ed8;
+}
+
+.pvc-session-name {
+  font-weight: 500;
+  margin-bottom: 2px;
+}
+
+.pvc-session-meta {
+  font-size: 11px;
+  color: #64748b;
+}
+
+/* Chat area — minimal left padding so AI messages start near the left edge */
+.pvc-main {
+  flex: 1;
+  overflow-y: auto;
+  padding: 16px 24px 24px 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.pvc-empty {
+  border: 1px dashed #cbd5e1;
+  border-radius: 12px;
+  padding: 20px;
+  text-align: center;
+  font-size: 14px;
+  color: #64748b;
+}
+
+.pvc-bottom-anchor {
+  width: 1px;
+  height: 1px;
+}
+
+/* Message row */
+.pvc-msg {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+}
+
+.pvc-msg.right {
+  flex-direction: row-reverse;
+}
+
+/* Avatar */
+.pvc-avatar {
+  width: 36px;
+  height: 36px;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  border: 1px solid #e2e8f0;
+}
+
+.pvc-avatar.user {
+  background: #1d4ed8;
+  color: #fff;
+  border-color: #1e40af;
+}
+
+.pvc-avatar.assistant {
+  background: #0ea5e9;
+  color: #fff;
+  border-color: #0284c7;
+}
+
+.pvc-icon {
+  width: 18px;
+  height: 18px;
+}
+
+/* Message body — use more width to avoid large right-side blank */
+.pvc-message-body {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  max-width: 88%;
+}
+
+.pvc-bubble {
+  padding: 10px 14px;
+  border-radius: 16px;
+  font-size: 14px;
+  line-height: 1.4;
+  word-wrap: break-word;
+  white-space: pre-wrap;
+}
+
+.pvc-bubble p {
+  margin: 0;
+}
+
+.pvc-bubble p:empty {
+  line-height: 0;
+  min-height: 0;
+}
+
+.pvc-bubble.user {
+  background: #1d4ed8;
+  color: #fff;
+  border-bottom-right-radius: 4px;
+}
+
+.pvc-bubble.assistant {
+  background: #eef2ff;
+  color: #1e293b;
+  border-bottom-left-radius: 4px;
+}
+
+/* Markdown in assistant bubble — single small gap between blocks; we wrap in .pvc-markdown-inner so selectors always hit the real blocks */
+.pvc-markdown {
+  margin: 0;
+  font-size: 14px;
+  line-height: 1.5;
+  word-wrap: break-word;
+}
+
+.pvc-markdown-inner > * {
+  margin: 0;
+}
+.pvc-markdown-inner > * + * {
+  margin-top: 0.36em;
+}
+/* Minimal gap after headings */
+.pvc-markdown-inner > h1 + *,
+.pvc-markdown-inner > h2 + *,
+.pvc-markdown-inner > h3 + * {
+  margin-top: 0.12em;
+}
+/* Tighter spacing between paragraphs */
+.pvc-markdown-inner > p + p {
+  margin-top: 0.2em;
+}
+
+/* Hide empty paragraphs (e.g. from multiple blank lines in AI output) so they don’t add extra gap */
+.pvc-markdown p:empty {
+  display: none;
+}
+
+.pvc-markdown p,
+.pvc-markdown ul,
+.pvc-markdown ol,
+.pvc-markdown h1, .pvc-markdown h2, .pvc-markdown h3,
+.pvc-markdown pre, .pvc-markdown blockquote, .pvc-markdown hr {
+  margin: 0;
+}
+
+.pvc-markdown h1, .pvc-markdown h2, .pvc-markdown h3 {
+  font-weight: 600;
+  line-height: 1.3;
+}
+
+.pvc-markdown h1 { font-size: 1.25em; }
+.pvc-markdown h2 { font-size: 1.1em; }
+.pvc-markdown h3 { font-size: 1em; }
+
+.pvc-markdown hr {
+  border: none;
+  border-top: 1px solid rgba(0, 0, 0, 0.12);
+}
+
+.pvc-markdown ul, .pvc-markdown ol {
+  padding-left: 1.5em;
+}
+
+.pvc-markdown li {
+  margin: 0.04em 0;
+}
+
+.pvc-markdown code {
+  font-size: 0.9em;
+  padding: 0.15em 0.35em;
+  border-radius: 4px;
+  background: rgba(0, 0, 0, 0.06);
+}
+
+.pvc-markdown pre {
+  padding: 10px 12px;
+  border-radius: 8px;
+  background: rgba(0, 0, 0, 0.06);
+  overflow-x: auto;
+}
+
+.pvc-markdown pre code {
+  padding: 0;
+  background: none;
+}
+
+.pvc-markdown blockquote {
+  padding-left: 1em;
+  border-left: 3px solid rgba(0, 0, 0, 0.15);
+  color: #475569;
+}
+
+.pvc-markdown strong {
+  font-weight: 600;
+}
+
+.pvc-bubble-typing {
+  padding: 6px 12px;
+}
+
+.pvc-typing-indicator {
+  margin: 0;
+  font-size: 14px;
+  letter-spacing: 2px;
+}
+
+.pvc-typing-indicator span {
+  animation: pvc-typing-dot 0.6s ease-in-out infinite;
+}
+
+.pvc-typing-indicator span:nth-child(2) {
+  animation-delay: 0.15s;
+}
+
+.pvc-typing-indicator span:nth-child(3) {
+  animation-delay: 0.3s;
+}
+
+@keyframes pvc-typing-dot {
+  0%, 60%, 100% {
+    opacity: 0.3;
+  }
+  30% {
+    opacity: 1;
+  }
+}
+
+/* Reasoning — subtle gray, expand/collapse; default expanded, collapse when answer done */
+.pvc-reasoning {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-top: 6px;
+}
+
+.pvc-reasoning-toggle {
+  align-self: flex-start;
+  background: none;
+  border: none;
+  color: #94a3b8;
+  font-size: 11px;
+  cursor: pointer;
+  padding: 0;
+}
+
+.pvc-reasoning-toggle:hover {
+  color: #64748b;
+}
+
+.pvc-reasoning-content {
+  padding: 8px 12px;
+  border-radius: 8px;
+  background: #f8fafc;
+  color: #94a3b8;
+  font-size: 11px;
+  line-height: 1.5;
+  white-space: pre-wrap;
+}
+
+/* Footer */
+.pvc-footer {
+  border-top: 1px solid #e2e8f0;
+  padding: 16px 24px;
+  background: #ffffff;
+}
+
+.pvc-input-wrap {
+  position: relative;
+}
+
+.pvc-input {
+  width: 100%;
+  border-radius: 12px;
+  padding: 12px 48px 12px 14px;
+  border: 1px solid #cbd5e1;
+  background: #ffffff;
+  color: #111827;
+  resize: none;
+  font-size: 14px;
+  min-height: 48px;
+  outline: none;
+  transition: border-color 0.2s;
+}
+
+.pvc-input:focus {
+  border-color: #1d4ed8;
+  box-shadow: 0 0 0 3px rgba(29, 78, 216, 0.12);
+}
+
+.pvc-button.primary {
+  position: absolute;
+  right: 6px;
+  top: 50%;
+  transform: translateY(-50%);
+  background: #1d4ed8;
+  color: #fff;
+  border: none;
+  border-radius: 8px;
+  padding: 8px;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.pvc-button.primary:hover {
+  background: #1e40af;
+}
+
+.pvc-button.primary:disabled {
+  background: #cbd5e1;
+  cursor: not-allowed;
+}
+
+.pvc-footer-tip {
+  margin-top: 8px;
+  text-align: center;
+  font-size: 11px;
+  color: #94a3b8;
+}
+
+/* Toggle switch */
+.pvc-toggle {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 12px;
+  color: #475569;
+}
+
+.pvc-toggle-button {
+  width: 40px;
+  height: 22px;
+  border-radius: 9999px;
+  border: 1px solid #cbd5e1;
+  background: #f1f5f9;
+  position: relative;
+  cursor: pointer;
+  transition: background 0.2s;
+}
+
+.pvc-toggle-button.on {
+  background: #0ea5e9;
+  border-color: #0284c7;
+}
+
+.pvc-toggle-thumb {
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  width: 16px;
+  height: 16px;
+  background: #ffffff;
+  border-radius: 50%;
+  transition: transform 0.2s;
+}
+
+.pvc-toggle-button.on .pvc-toggle-thumb {
+  transform: translateX(18px);
+}
+
+/* Scrollbar */
+.pvc-sidebar::-webkit-scrollbar,
+.pvc-main::-webkit-scrollbar {
+  width: 6px;
+}
+
+.pvc-sidebar::-webkit-scrollbar-thumb,
+.pvc-main::-webkit-scrollbar-thumb {
+  background: #cbd5e1;
+  border-radius: 3px;
+}
+
+/* Animations */
+@keyframes fadeIn {
+  from {
+    opacity: 0;
+    transform: translateY(4px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.pvc-msg {
+  animation: fadeIn 0.2s ease-out;
+}

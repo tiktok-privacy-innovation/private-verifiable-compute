@@ -12,72 +12,124 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::chat::ChatCompletionManager;
-use crate::noise::{Sessions, decrypt_with_noise, encrypt_with_noise};
+use super::ServiceConfig;
+use crate::chat::ChatCompletionHelper;
 use crate::rag::VectorStores;
-use crate::session::Sid;
+use crate::request::CleartextPayload;
+use crate::session::Session;
+use crate::session::{Sessions, Sid};
 use anyhow::Result;
-use base64::{Engine, prelude::BASE64_STANDARD};
+use bytes::Bytes;
+use futures::stream::{BoxStream, StreamExt};
+use openai_api_rs::v1::chat_completion::chat_completion_stream::ChatCompletionStreamRequest;
+use openai_api_rs::v1::chat_completion::{Content, MessageRole};
+
 use rocket::State;
-use rocket::http::Status;
-use rocket::serde::json::Json;
-use tokio::sync::Mutex;
-use types::{ApiCode, ApiResponse, InferenceResp};
+use rocket::response::stream::ByteStream;
+use serde_json::Value;
+use std::sync::Arc;
+use tokio::sync::{Mutex, mpsc};
+use tokio_stream::wrappers::ReceiverStream;
+use tracing::error;
+use types::ApiCode;
 
-#[post("/", data = "<payload>")]
-pub async fn inference(
+fn ensure_field(obj: &mut Value, key: &str, default: String) {
+    let map = obj.as_object_mut();
+    if map.is_some() {
+        map.unwrap()
+            .entry(key.to_string())
+            .or_insert(Value::String(default));
+    }
+}
+
+#[post("/chat/completions", data = "<payload>")]
+pub async fn chat_completions(
     sessions: &State<Sessions>,
-    payload: Vec<u8>,
+    payload: CleartextPayload,
     sid: Sid,
-    chat_completion_mgr: &State<Mutex<ChatCompletionManager>>,
+    chat_completion_helper: &State<ChatCompletionHelper>,
     vector_stores: &State<VectorStores>,
-) -> Result<Json<ApiResponse<InferenceResp>>, Status> {
-    let decoded = BASE64_STANDARD
-        .decode(&payload)
-        .map_err(|_| Status::BadRequest)?;
-
-    let user_prompt: Vec<u8> = decrypt_with_noise(sessions, &sid, &decoded)
+    config: &State<ServiceConfig>,
+) -> Result<ByteStream![Bytes], ApiCode> {
+    let session = sessions
+        .get(&sid)
         .await
-        .map_err(|_| Status::BadRequest)?;
-    let user_prompt = String::from_utf8(user_prompt).map_err(|_| Status::BadRequest)?;
+        .map_err(|_| ApiCode::InvalidSessionId)?;
+    let mut json_payload: serde_json::Value =
+        serde_json::from_slice(payload.as_bytes()).map_err(|e| {
+            error!("invalid json payload: {}", e);
+            ApiCode::InvalidRequestBody
+        })?;
+    // ensure model field
+    ensure_field(&mut json_payload, "model", config.llm_model.clone());
+
+    let req: ChatCompletionStreamRequest = serde_json::from_value(json_payload).map_err(|e| {
+        error!("invalid json payload for req messages: {}", e);
+        ApiCode::InvalidRequestBody
+    })?;
 
     let documents = {
-        let mut vector_stores = vector_stores.write().await;
-        if let Some(vector_store) = vector_stores.get(&sid) {
-            vector_store
-                .query_top_n(1, user_prompt.clone())
-                .await
-                .unwrap()
+        if let Some(user_prompt) = req.messages.last()
+            && user_prompt.role == MessageRole::user
+            && let Content::Text(txt) = user_prompt.content.clone()
+        {
+            let mut vector_stores = vector_stores.write().await;
+            if let Some(vector_store) = vector_stores.get(&sid) {
+                Some(vector_store.query_top_n(1, txt).await.unwrap_or(Vec::new()))
+            } else {
+                None
+            }
         } else {
-            Vec::new()
+            None
         }
     };
 
-    let mut mgr = chat_completion_mgr.lock().await;
-    let llm_response = match documents.len() {
-        0 => mgr.chat(&sid.to_string(), &user_prompt).await,
-        _ => {
-            mgr.chat_with_context(&sid.to_string(), &user_prompt, Some(&documents))
-                .await
-        }
-    }
-    .map_err(|e| {
-        error!("ERROR forwarding request to OpenAI: {}", e);
-        Status::InternalServerError
-    })?;
-
-    let encrypted_content = encrypt_with_noise(sessions, &sid, llm_response.as_bytes())
+    let stream = chat_completion_helper
+        .stream_completion(req, documents)
         .await
         .map_err(|e| {
-            error!("ERROR noise protocol failed encryption: {}", e);
-            Status::InternalServerError
+            error!("ERROR forwarding request to backend LLM: {}", e);
+            ApiCode::TeeLlmError
         })?;
 
-    Ok(Json(ApiResponse {
-        code: ApiCode::Success as i32,
-        message: String::new(),
-        data: Some(InferenceResp {
-            content: encrypted_content,
-        }),
-    }))
+    encrypt_stream(session, stream)
+        .await
+        .map_err(|_| ApiCode::NoiseEncryptedFailed)
+}
+
+/// Creates an encrypted stream by encrypting each chunk of the input stream
+async fn encrypt_stream(
+    session: Arc<Mutex<Session>>,
+    input_stream: BoxStream<'static, Bytes>,
+) -> Result<ByteStream![Bytes]> {
+    // Create a channel for encrypted results
+    let (result_tx, result_rx) = mpsc::channel::<Bytes>(128);
+
+    // Clone the session for the encryption task
+    let enc_session = session.clone();
+
+    // Spawn a dedicated task for encryption processing
+    tokio::spawn(async move {
+        let mut stream = input_stream;
+        while let Some(chunk) = stream.next().await {
+            let mut session_guard = enc_session.lock().await;
+            match session_guard.encrypt_with_prefix_len(&chunk) {
+                Ok(ct) => {
+                    if result_tx.send(Bytes::from(ct)).await.is_err() {
+                        error!("encrypt_stream: failed to send via pipe");
+                        break;
+                    }
+                }
+                Err(e) => {
+                    error!("encrypt_stream: encryption failed {}", e);
+                    break;
+                }
+            }
+        }
+    });
+
+    // Convert the receiver into a stream
+    let encrypted_stream = ReceiverStream::new(result_rx).boxed();
+
+    Ok(ByteStream::from(encrypted_stream))
 }

@@ -1,0 +1,8 @@
+{
+  "identityServerUrl": "/identity",
+  "ohttpGatewayUrl": "/ohttp-gateway",
+  "ohttpRelayUrl": "/ohttp-relay",
+  "targetServerUrl": "http://localhost:9000",
+  "attestationServiceUrl": "/attestation-service/attestation",
+  "model": "Qwen/Qwen3-VL-4B-Thinking"
+}

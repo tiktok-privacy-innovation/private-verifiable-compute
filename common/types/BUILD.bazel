@@ -20,6 +20,7 @@ package(default_visibility = ["//visibility:public"])
 rust_library(
     name = "types",
     srcs = [
+        "src/async_rw.rs",
         "src/http.rs",
         "src/keys.rs",
         "src/lib.rs",
@@ -39,5 +40,6 @@ rust_test(
     crate = ":types",
     deps = [
         "@crates//:rand_core",
+        "@crates//:tokio",
     ],
 )

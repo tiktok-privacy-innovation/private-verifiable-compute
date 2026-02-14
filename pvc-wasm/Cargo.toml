@@ -1,0 +1,41 @@
+[package]
+name = "pvc-wasm"
+version = "0.1.0"
+edition = "2021"
+
+[features]
+default = ["noise"]
+noise = []
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+wasm-bindgen = "0.2"
+futures = "0.3"
+js-sys = "0.3"
+ohttp = { version = "0.7.0", default-features = false, features = ["rust-hpke", "client", "stream"] }
+bhttp = { version = "0.7.0", features = ["http"] }
+snow = { package = "snow", version = "0.10.0", default-features = false, features = [
+  "default-resolver",
+  "default-resolver-crypto",
+] }
+getrandom = { version = "0.3", features = ["wasm_js"] }
+ring = { version = "0.17", features = ["wasm32_unknown_unknown_js"] }
+bytes = "1.0"
+hex = "0.4"
+rand = "0.8"
+p256 = { version = "0.13", features = ["ecdsa"] }
+console_error_panic_hook = "0.1"
+wasm-bindgen-futures = "0.4"
+base64 = { workspace = true }
+blind-rsa = { workspace = true }
+
+[dependencies.web-sys]
+version = "0.3"
+features = [
+  "console",
+]
+
+[package.metadata.wasm-pack.profile.release]
+wasm-opt = false

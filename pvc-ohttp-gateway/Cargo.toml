@@ -4,6 +4,10 @@ version = "0.1.0"
 license = "Apache-2.0"
 edition.workspace = true
 
+[features]
+default = ["base64"]
+base64 = []
+
 [dependencies]
 ohttp-gateway = { workspace = true }
 tracing = { workspace = true }
@@ -13,4 +17,10 @@ tokio = { workspace = true }
 hyper = { workspace = true }
 hyper-util = { workspace = true }
 tower = { workspace = true }
+types = { workspace = true }
 tower-http = { workspace = true }
+futures = { workspace = true }
+ohttp_wrap = { workspace = true }
+bytes = { workspace = true }
+reqwest = { workspace = true }
+base64 = { workspace = true }

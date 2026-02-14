@@ -24,10 +24,10 @@ use sha2::{Digest, Sha256};
 #[derive(Debug, Serialize, Deserialize)]
 pub struct BlindMessageRequest {
     #[serde(rename = "blindedMessage")]
-    pub blinded_message: String,
+    pub blinded_message: Vec<u8>,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Serialize, Deserialize)]
 pub struct BlindMessageResponse {
     pub signature: String,
 }
@@ -40,10 +40,11 @@ pub struct PublicKeyFields {
     pub e: String,
 }
 
+/// ContextKey: a key to encrypt client's context, uploaded and controled by client
 #[derive(Clone)]
-pub struct EncryptionKey(pub Vec<u8>);
+pub struct ContextKey(pub Vec<u8>);
 
-impl EncryptionKey {
+impl ContextKey {
     pub fn new(key: &[u8]) -> Self {
         Self(key.to_vec())
     }

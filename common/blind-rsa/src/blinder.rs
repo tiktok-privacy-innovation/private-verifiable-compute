@@ -42,7 +42,7 @@ impl RsaBlinder {
         let options = Options::default();
         let rsa_pk: PublicKey = pk.try_into()?;
         let res = rsa_pk
-            .blind(&mut DefaultRng, msg, true, &options)
+            .blind(&mut DefaultRng, msg, false, &options)
             .context("failed to blind msg")?;
         Ok(BlindingState {
             msg: msg.to_vec(),

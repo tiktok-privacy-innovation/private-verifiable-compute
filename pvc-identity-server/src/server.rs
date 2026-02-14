@@ -20,10 +20,13 @@ use blind_rsa::{RsaBlindConfig, blinder::PublicKeyParts};
 use rocket::State;
 use rocket::http::Status;
 use rocket::request::{FromRequest, Outcome, Request};
-use rocket::serde::{Deserialize, Serialize, json::Json};
+use rocket::serde::json::Json;
 use serde_json::json;
-use tracing::error;
-use types::{ApiCode, ApiResponse, keys::PublicKeyFields};
+use types::{
+    ApiCode, ApiResult,
+    keys::PublicKeyFields,
+    keys::{BlindMessageRequest, BlindMessageResponse},
+};
 
 #[allow(dead_code)]
 pub struct AuthToken(pub String);
@@ -51,28 +54,6 @@ pub struct AppState {
     pub signer: RsaBlindSigner,
 }
 
-/// Sign request
-#[derive(Deserialize)]
-pub struct SignRequest {
-    #[serde(rename = "blindedMessage")]
-    pub blinded_message: String,
-}
-
-/// Sign response
-#[derive(Serialize)]
-pub struct SignData {
-    pub signature: String,
-}
-
-/// Base64 helpers
-fn base64_encode(data: &[u8]) -> String {
-    general_purpose::STANDARD.encode(data)
-}
-
-fn base64_decode(s: &str) -> Result<Vec<u8>, base64::DecodeError> {
-    general_purpose::STANDARD.decode(s)
-}
-
 /// Root endpoint
 #[get("/")]
 pub fn root() -> Json<serde_json::Value> {
@@ -88,7 +69,7 @@ pub fn root() -> Json<serde_json::Value> {
 
 /// Public key endpoint
 #[get("/pubkey")]
-pub fn pubkey(state: &State<AppState>) -> Result<Json<ApiResponse<PublicKeyFields>>, Status> {
+pub fn pubkey(state: &State<AppState>) -> ApiResult<PublicKeyFields> {
     let pk = state.signer.pubkey();
 
     let pubkey_comp = PublicKeyFields {
@@ -96,11 +77,7 @@ pub fn pubkey(state: &State<AppState>) -> Result<Json<ApiResponse<PublicKeyField
         e: BASE64_STANDARD.encode(pk.e().to_bytes_le()),
     };
 
-    Ok(Json(ApiResponse {
-        code: ApiCode::Success as i32,
-        message: String::new(),
-        data: Some(pubkey_comp),
-    }))
+    Ok(pubkey_comp).into()
 }
 
 /// Sign endpoint
@@ -108,25 +85,20 @@ pub fn pubkey(state: &State<AppState>) -> Result<Json<ApiResponse<PublicKeyField
 pub fn sign(
     state: &State<AppState>,
     _token: AuthToken,
-    req: Json<SignRequest>,
-) -> Result<Json<ApiResponse<SignData>>, Status> {
-    let blinded_bytes = base64_decode(&req.blinded_message).map_err(|_| {
-        error!("failed to decode blinded message");
-        Status::BadRequest
-    })?;
+    req: Json<BlindMessageRequest>,
+) -> ApiResult<BlindMessageResponse> {
+    let logic = || -> Result<BlindMessageResponse, ApiCode> {
+        let signature = state
+            .signer
+            .blind_sign(&req.blinded_message)
+            .map_err(|_| ApiCode::BlindSignFailed)?;
 
-    let signature = state.signer.blind_sign(&blinded_bytes).map_err(|_| {
-        error!("failed to sign message");
-        Status::InternalServerError
-    })?;
+        let sig_b64 = general_purpose::STANDARD.encode(&signature);
 
-    let sig_b64 = base64_encode(&signature);
+        Ok(BlindMessageResponse { signature: sig_b64 })
+    };
 
-    Ok(Json(ApiResponse {
-        code: ApiCode::Success as i32,
-        message: String::new(),
-        data: Some(SignData { signature: sig_b64 }),
-    }))
+    logic().into()
 }
 
 #[get("/health")]
@@ -185,13 +157,15 @@ mod tests {
         let blind_result: BlindingResult = pk
             .blind(rng, message, true, &options)
             .expect("blind failed");
-        let blinded_b64 = base64_encode(&blind_result.blind_msg.0);
+        // let blinded_b64 = base64_encode(&blind_result.blind_msg.0);
 
-        let req_body = serde_json::json!({ "blindedMessage": blinded_b64 });
+        let req_body = BlindMessageRequest {
+            blinded_message: blind_result.blind_msg.0,
+        };
         let response = client
             .post("/sign")
             .header(rocket::http::ContentType::JSON)
-            .body(req_body.to_string())
+            .body(serde_json::to_string(&req_body).unwrap())
             .dispatch();
 
         assert_eq!(response.status().code, 200);

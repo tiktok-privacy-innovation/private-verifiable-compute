@@ -17,35 +17,56 @@ use async_trait::async_trait;
 use base64::prelude::*;
 use blind_rsa::BlindPublicKey;
 use blind_rsa::blinder::RsaBlinder;
+
+use bytes::Bytes;
+use futures::TryStreamExt;
 use identity::IdentityClient;
 use noise::{NoiseNnInitiator, NoiseNnTransport};
-use ohttp_wrap::{ClientRequest, ClientResponse, KeyConfig, Message, Mode, OhttpClient};
+use ohttp_wrap::{ClientRequest, KeyConfig, Message, Mode, OhttpClient};
 use p256::ecdsa::{Signature, signature::Verifier};
+use rand_core::{OsRng, RngCore};
 use serde::de::DeserializeOwned;
 use serde_json::Value;
-use types::http::{HttpClient, Response};
-use types::keys::decode_verifying_key;
-use types::keys::{BlindMessageRequest, BlindMessageResponse, EncryptionKey, PublicKeyFields};
+use std::pin::Pin;
+use std::sync::Arc;
+use tokio::sync::Mutex;
+use tokio_util::codec::LengthDelimitedCodec;
+use tokio_util::io::StreamReader;
 use types::{
-    ApiResponse, EmptyResp, HandShakeResp, InferenceResp, UploadDocumentReq, UploadDocumentResp,
-};
-use types::{
-    AttestationResponse,
-    http::reqwest::{
-        IntoUrl, Url,
-        header::{AUTHORIZATION, CONTENT_TYPE, HeaderMap, HeaderValue},
+    ApiError, ApiResponse, AttestationResponse, HandShakeResp, UploadDocumentReq,
+    async_rw::{self},
+    http::{
+        HttpClient,
+        reqwest::{
+            IntoUrl, Url,
+            header::{AUTHORIZATION, CONTENT_TYPE, HeaderMap, HeaderValue},
+        },
+    },
+    keys::{
+        BlindMessageRequest, BlindMessageResponse, ContextKey, PublicKeyFields,
+        decode_verifying_key,
     },
 };
+
 #[cfg(feature = "attestation")]
 use verifier::{InitDataHash, ReportData as TeeReportData, to_verifier};
 
-const HANDSHAKE_PATH: &str = "/handshake/noise";
-const INFERENCE_PATH: &str = "/inference";
-const ATTESTATION_PATH: &str = "/attestation";
-const ATTESTATION_WITH_NONCE_PATH: &str = "/attestation/nonce";
-const UPLOAD_KEY_PATH: &str = "/key/upload";
-const UPLOAD_DOCUMENT_PATH: &str = "/document/upload";
+use futures::stream::Stream;
+use futures::stream::StreamExt;
+use futures::{AsyncReadExt, AsyncWriteExt};
+
+const ESTABLISH_PATH: &str = "/v1/establish";
+const CHAT_COMPLETIONS_PATH: &str = "/v1/chat/completions";
+const HANDSHAKE_WITH_ATTESTATION_PATH: &str = "/v1/handshake";
+const ATTESTATION_PATH: &str = "/v1/attestation";
+const UPLOAD_KEY_PATH: &str = "/v1/keys";
+const UPLOAD_DOCUMENT_PATH: &str = "/v1/documents";
 const NVIDIA_NONCE_SIZE: usize = 32;
+
+const SESSION_ID_HEADER: &str = "X-Session-ID";
+const IDENTITY_TOKEN_HEADER: &str = "X-Identity-Token";
+const IDENTITY_MESSAGE_HEADER: &str = "X-Identity-Message";
+
 pub type Claim = Vec<(Value, String)>;
 
 pub struct PvcClient {
@@ -55,7 +76,7 @@ pub struct PvcClient {
     http_client: HttpClient,
     ohttp_key_config: KeyConfig,
     session_id: Option<String>,
-    noise_transport: Option<NoiseNnTransport>,
+    noise_transport: Option<Arc<Mutex<NoiseNnTransport>>>,
 }
 
 impl PvcClient {
@@ -80,7 +101,7 @@ impl PvcClient {
     pub async fn handshake_with_attestation(&mut self, id_token: Option<String>) -> Result<()> {
         let claims = self.attest(None, id_token.clone()).await?;
         let verifying_key = crate::server::extract_report_data(&claims);
-        self.noise_with_ohttp(verifying_key, id_token).await?;
+        self.establish(verifying_key, id_token).await?;
         Ok(())
     }
 
@@ -89,37 +110,40 @@ impl PvcClient {
         nonce: Option<String>,
         id_token: Option<String>,
     ) -> Result<Claim> {
-        let (_msg, token) = self.get_identity_token(id_token).await?;
+        let (msg, token) = self.get_identity_token(id_token).await?;
         let mut handshake_header = HeaderMap::new();
-        handshake_header.insert("X-Identity-Token", HeaderValue::from_str(&token)?);
+        handshake_header.insert(IDENTITY_TOKEN_HEADER, HeaderValue::from_str(&token)?);
+        handshake_header.insert(IDENTITY_MESSAGE_HEADER, HeaderValue::from_str(&msg)?);
         handshake_header.insert(
             CONTENT_TYPE,
             HeaderValue::from_static("application/octet-stream"),
         );
 
         if let Some(sid) = &self.session_id {
-            handshake_header.insert("X-Session-Id", HeaderValue::from_str(sid)?);
+            handshake_header.insert(SESSION_ID_HEADER, HeaderValue::from_str(sid)?);
         }
 
         let resp: AttestationResponse = match &nonce {
             Some(nonce) => {
-                self.ohttp_post(
-                    &self.target_url,
-                    ATTESTATION_WITH_NONCE_PATH,
-                    Some(handshake_header),
-                    Some(nonce.as_bytes().to_vec()),
-                )
-                .await?
-            }
-            None => {
+                let nonce_data = BASE64_STANDARD.decode(nonce)?;
                 self.ohttp_post(
                     &self.target_url,
                     ATTESTATION_PATH,
                     Some(handshake_header),
+                    Some(nonce_data),
+                )
+                .await?
+                .ok_or(ApiError::MissingData)?
+            }
+            None => self
+                .ohttp_post(
+                    &self.target_url,
+                    HANDSHAKE_WITH_ATTESTATION_PATH,
+                    Some(handshake_header),
                     None,
                 )
                 .await?
-            }
+                .ok_or(ApiError::MissingData)?,
         };
 
         let claim = {
@@ -142,18 +166,15 @@ impl PvcClient {
                     .evaluate(resp.evidence, &cpu_report_data, &InitDataHash::NotProvided)
                     .await?;
                 info!("device tee num: {:?}", resp.device_evidences);
-                if let Some((key, evidence)) = resp.device_evidences {
+                if let Some((tee, evidence)) = resp.device_evidences {
                     let json_data = r#"{
                         "nvidia_verifier": {
-                            "verifier": {
-                                "Remote": {
-                                    "verifier_url": "https://nras.attestation.nvidia.com/v4/attest"
-                                }
-                            }
+                            "type": "Remote",
+                            "verifier_url": "https://nras.attestation.nvidia.com/v4/attest"
                         }
                     }"#;
                     let config: verifier::VerifierConfig = serde_json::from_str(json_data).unwrap();
-                    let device_verifier = to_verifier(&key, Some(config)).await.unwrap();
+                    let device_verifier = to_verifier(&tee, Some(config)).await.unwrap();
                     match device_verifier
                         .evaluate(
                             evidence.clone(),
@@ -187,99 +208,73 @@ impl PvcClient {
         Ok(claim)
     }
 
-    pub async fn noise_with_ohttp(
+    pub async fn establish(
         &mut self,
         verifying_key: [u8; 64],
         id_token: Option<String>,
     ) -> Result<()> {
-        let (_msg, token) = self.get_identity_token(id_token).await?;
+        let (msg, token) = self.get_identity_token(id_token).await?;
         // noise protocol over ohttp
         let mut noise_initiator =
             NoiseNnInitiator::new("Noise_NN_25519_ChaChaPoly_BLAKE2s".parse().unwrap(), None)?;
 
         let mut handshake_header = HeaderMap::new();
-        handshake_header.insert("X-Identity-Token", HeaderValue::from_str(&token)?);
+        handshake_header.insert(IDENTITY_TOKEN_HEADER, HeaderValue::from_str(&token)?);
+        handshake_header.insert(IDENTITY_MESSAGE_HEADER, HeaderValue::from_str(&msg)?);
         handshake_header.insert(
             CONTENT_TYPE,
             HeaderValue::from_static("application/octet-stream"),
         );
 
         if let Some(sid) = &self.session_id {
-            handshake_header.insert("X-Session-Id", HeaderValue::from_str(sid)?);
+            handshake_header.insert(SESSION_ID_HEADER, HeaderValue::from_str(sid)?);
         }
 
         let ephemeral = noise_initiator.generate_ephemeral()?;
-        let encoded_noise_initiator = BASE64_STANDARD.encode(&ephemeral);
         let resp: HandShakeResp = self
             .ohttp_post(
                 &self.target_url,
-                HANDSHAKE_PATH,
+                ESTABLISH_PATH,
                 Some(handshake_header),
-                Some(encoded_noise_initiator.as_bytes().to_vec()),
+                Some(ephemeral.clone()),
             )
-            .await?;
+            .await?
+            .ok_or(ApiError::MissingData)?;
 
         verify_noise_script_signature(verifying_key, &ephemeral, &resp.data, &resp.signature)?;
 
         let tp = noise_initiator.recv_response(&resp.data)?;
-        self.noise_transport = Some(tp);
+        self.noise_transport = Some(std::sync::Arc::new(tokio::sync::Mutex::new(tp)));
         Ok(())
     }
 
+    #[cfg(feature = "noise")]
     fn encrypt_message(&mut self, message: &[u8]) -> Result<Vec<u8>> {
-        if let Some(t) = &mut self.noise_transport {
-            t.encrypt(message)
+        if let Some(t) = &self.noise_transport {
+            let mut transport = t
+                .try_lock()
+                .map_err(|_| anyhow!("Failed to acquire lock on noise transport"))?;
+            transport.encrypt(message)
         } else {
             Err(anyhow!("noise transport is none, internal error happens"))
         }
     }
 
-    fn decrypt_message(&mut self, message: &[u8]) -> Result<Vec<u8>> {
-        if let Some(t) = &mut self.noise_transport {
-            t.decrypt(message)
-        } else {
-            Err(anyhow!("noise transport is none, internal error happens"))
-        }
+    #[cfg(not(feature = "noise"))]
+    fn encrypt_message(&mut self, message: &[u8]) -> Result<Vec<u8>> {
+        Ok(message.to_vec())
     }
 
-    pub async fn request_inference(&mut self, input: &str) -> Result<String> {
-        let encrypted = self.encrypt_message(input.as_bytes())?;
-        let mut headers = HeaderMap::new();
-        headers.insert(
-            CONTENT_TYPE,
-            HeaderValue::from_static("application/octet-stream"),
-        );
-        if let Some(sid) = &self.session_id {
-            headers.insert("X-Session-Id", HeaderValue::from_str(sid)?);
-        }
-
-        let encoded_encrypted_message = BASE64_STANDARD.encode(encrypted);
-
-        let resp: InferenceResp = self
-            .ohttp_post(
-                &self.target_url,
-                INFERENCE_PATH,
-                Some(headers),
-                Some(encoded_encrypted_message.as_bytes().to_vec()),
-            )
-            .await?;
-
-        let decrypted_resp = self.decrypt_message(&resp.content)?;
-        let res: String = String::from_utf8(decrypted_resp).unwrap();
-        Ok(res)
-    }
-
-    pub async fn upload_encryption_key(&mut self, session_key: &EncryptionKey) -> Result<()> {
-        let encrypted = self.encrypt_message(&session_key.0)?;
+    pub async fn upload_encryption_key(&mut self, session_key: &ContextKey) -> Result<()> {
+        let encrypted_key = self.encrypt_message(&session_key.0)?;
         let headers = self.generate_header();
-        let encoded_encrypted_message = BASE64_STANDARD.encode(encrypted);
 
-        let _: EmptyResp = self
+        let _: Option<()> = self
             .ohttp_post(
                 &self.target_url,
                 UPLOAD_KEY_PATH,
                 Some(headers),
-                Some(encoded_encrypted_message.as_bytes().to_vec()),
+                Some(encrypted_key),
             )
             .await?;
         Ok(())
@@ -293,7 +288,7 @@ impl PvcClient {
         let req_str = serde_json::to_string(&req).unwrap();
         let encrypted = self.encrypt_message(req_str.as_bytes())?;
         let headers = self.generate_header();
-        let _: UploadDocumentResp = self
+        let _: Option<()> = self
             .ohttp_post(
                 &self.target_url,
                 UPLOAD_DOCUMENT_PATH,
@@ -304,16 +299,16 @@ impl PvcClient {
         Ok(())
     }
 
-    async fn get_identity_token(
-        &self,
-        id_token: Option<String>,
-    ) -> anyhow::Result<(Vec<u8>, String)> {
+    async fn get_identity_token(&self, id_token: Option<String>) -> Result<(String, String)> {
         // Step 1: Fetch public key from identity server
         let pk: BlindPublicKey = self.fetch_public_key().await?;
 
         // Step 2: Generate full domain hashed message for blind signature
-        let msg = vec![0; 20];
-
+        let msg = {
+            let mut msg = vec![0; 20];
+            OsRng.fill_bytes(&mut msg);
+            msg
+        };
         let blinder = RsaBlinder {};
         // Step 3: Blind the message
         let state = blinder
@@ -332,10 +327,7 @@ impl PvcClient {
             .verify(&blind_sig_bytes, &state, pk)
             .context("Failed to verify unblind signature")?;
 
-        // Step 6: Encode signature to token
-        let token = BASE64_STANDARD.encode(&sig);
-
-        Ok((msg, token))
+        Ok((hex::encode(&msg), hex::encode(&sig)))
     }
 
     fn generate_header(&self) -> HeaderMap {
@@ -345,9 +337,86 @@ impl PvcClient {
             HeaderValue::from_static("application/octet-stream"),
         );
         if let Some(sid) = &self.session_id {
-            headers.insert("X-Session-Id", HeaderValue::from_str(sid).unwrap());
+            headers.insert(SESSION_ID_HEADER, HeaderValue::from_str(sid).unwrap());
         }
         headers
+    }
+
+    async fn decrypt_cipher_stream(
+        &mut self,
+        stream: Pin<Box<dyn Stream<Item = Result<Bytes>> + Send>>,
+    ) -> Result<Pin<Box<dyn Stream<Item = Result<String>> + Send>>> {
+        let noise_transport = self
+            .noise_transport
+            .clone()
+            .ok_or_else(|| anyhow!("noise transport missing"))?;
+        let reader = StreamReader::new(
+            stream.map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e)),
+        );
+        let codec = LengthDelimitedCodec::builder()
+            .length_field_length(4)
+            .max_frame_length(1024 * 1024)
+            .new_read(reader);
+        let decrypted_stream = codec
+            .map_err(|e| anyhow!(format!("failed to read cipher stream {}", e)))
+            .then(move |frame_res| {
+                let noise_transport = noise_transport.clone();
+                async move {
+                    let frame = match frame_res {
+                        Ok(f) => f,
+                        Err(e) => return Err(e),
+                    };
+                    let mut transport = noise_transport.lock().await;
+                    #[cfg(feature = "noise")]
+                    {
+                        transport
+                            .decrypt(&frame)
+                            .map_err(|e| anyhow!("Decryption failed: {}", e))
+                            .and_then(|d| {
+                                String::from_utf8(d).map_err(|e| anyhow!("UTF8 error: {}", e))
+                            })
+                            .map(Some)
+                    }
+                    #[cfg(not(feature = "noise"))]
+                    {
+                        Ok(Some(String::from_utf8_lossy(&frame).to_string()))
+                    }
+                }
+            })
+            .try_filter_map(|res| async move { Ok(res) });
+        Ok(Box::pin(decrypted_stream))
+    }
+
+    pub async fn chat_completions(
+        &mut self,
+        h: Option<&HeaderMap>,
+        body: &[u8],
+    ) -> Result<Pin<Box<dyn Stream<Item = Result<String>> + Send>>> {
+        let mut headers = match h {
+            Some(h) => h.clone(),
+            None => HeaderMap::new(),
+        };
+        headers.insert(
+            CONTENT_TYPE,
+            HeaderValue::from_static("application/octet-stream"),
+        );
+        if let Some(sid) = &self.session_id {
+            headers.insert(SESSION_ID_HEADER, HeaderValue::from_str(sid)?);
+        }
+
+        let encrypted_input = self
+            .encrypt_message(body)
+            .map_err(|e| anyhow!("Failed to encrypt message: {}", e))?;
+        let stream = self
+            .ohttp_post_stream(
+                &self.target_url,
+                CHAT_COMPLETIONS_PATH,
+                Some(headers),
+                Some(encrypted_input),
+            )
+            .await?;
+
+        self.decrypt_cipher_stream(stream).await
     }
 }
 
@@ -372,7 +441,8 @@ impl IdentityClient for PvcClient {
         let resp: PublicKeyFields = self
             .http_client
             .get(self.identity_server_url.join("pubkey")?, None)
-            .await?;
+            .await?
+            .ok_or(ApiError::MissingData)?;
         let pk = BlindPublicKey {
             n: BASE64_STANDARD.decode(&resp.n)?,
             e: BASE64_STANDARD.decode(&resp.e)?,
@@ -387,7 +457,7 @@ impl IdentityClient for PvcClient {
         id_token: Option<String>,
     ) -> Result<Vec<u8>> {
         let body = BlindMessageRequest {
-            blinded_message: BASE64_STANDARD.encode(blinded_message),
+            blinded_message: blinded_message.to_vec(),
         };
         let mut headers = HeaderMap::new();
         headers.insert(CONTENT_TYPE, HeaderValue::from_static("application/json"));
@@ -405,7 +475,8 @@ impl IdentityClient for PvcClient {
                 bode_bytes.as_bytes(),
                 Some(headers),
             )
-            .await?;
+            .await?
+            .ok_or(ApiError::MissingData)?;
         let sig: Vec<u8> = BASE64_STANDARD.decode(resp.signature)?;
         Ok(sig)
     }
@@ -422,17 +493,21 @@ impl OhttpClient for PvcClient {
         let http_client = HttpClient::new();
         let resp = http_client.get_with_raw_response(config_url, None).await?;
         let cfg_bytes = resp.bytes().await?;
-        let key_config: KeyConfig = KeyConfig::decode(&cfg_bytes)?;
+        let length_prefix = u16::from_be_bytes([cfg_bytes[0], cfg_bytes[1]]);
+        if length_prefix != (cfg_bytes.len() - 2) as u16 {
+            return Err(anyhow!("Invalid length prefix for ohttp-configs"));
+        }
+        let key_config: KeyConfig = KeyConfig::decode(&cfg_bytes[2..])?;
         Ok(key_config)
     }
 
-    async fn ohttp_post<V: DeserializeOwned>(
+    async fn ohttp_post_stream(
         &self,
         target_server: &str,
         path: &str,
         headers: Option<HeaderMap>,
         body: Option<Vec<u8>>,
-    ) -> Result<V> {
+    ) -> Result<Pin<Box<dyn Stream<Item = Result<Bytes>> + Send>>> {
         // create http request
         let mut request = Message::request(
             b"POST".to_vec(),
@@ -448,39 +523,174 @@ impl OhttpClient for PvcClient {
                 request.put_header(name.as_str(), value.as_bytes());
             }
         }
+
         let mut request_buf = Vec::new();
         request.write_bhttp(Mode::KnownLength, &mut request_buf)?;
         let req: ClientRequest = ClientRequest::from_config(&mut self.ohttp_key_config.clone())?;
 
-        let (enc_request, ohttp_response) = req.encapsulate(&request_buf)?;
+        // The ohttp crate works in a pipe-like fashion.
+        // The we write the plain request to the write-end of the channel,
+        // and read the encrypted request from the read-end of the channel.
+        let (encrypted_request, client_request) = {
+            let (request_write, mut request_read) = async_rw::create_channel_pair();
+            let mut enc_request_writer = req
+                .encapsulate_stream(request_write)
+                .map_err(|e| anyhow!("Failed to encapsulate request: {}", e))?;
 
+            let reader_task: tokio::task::JoinHandle<Result<Vec<u8>, anyhow::Error>> =
+                tokio::spawn(async move {
+                    let mut encrypted_request = Vec::new();
+                    request_read
+                        .read_to_end(&mut encrypted_request)
+                        .await
+                        .map_err(|e| anyhow!("Failed to read from encrypt request: {}", e))?;
+                    Ok(encrypted_request)
+                });
+
+            enc_request_writer
+                .write_all(&request_buf)
+                .await
+                .map_err(|e| anyhow!("Failed to write request: {}", e))?;
+
+            enc_request_writer
+                .close()
+                .await
+                .map_err(|e| anyhow!("Failed to close writer: {}", e))?;
+
+            let encrypted_request = reader_task
+                .await
+                .map_err(|e| anyhow!("Failed reader task: {}", e))??;
+
+            (encrypted_request, enc_request_writer)
+        };
+
+        // Send the encrypted request
         let mut outer_headers: HeaderMap = HeaderMap::new();
         outer_headers.insert(CONTENT_TYPE, "message/ohttp-req".parse().unwrap());
-        let resp = self
+        let response = self
             .http_client
-            .post_with_raw_response(self.relay_url.clone(), &enc_request, Some(outer_headers))
+            .post_with_raw_response(
+                self.relay_url.clone(),
+                &encrypted_request,
+                Some(outer_headers),
+            )
             .await?
             .error_for_status()?;
 
-        let res = decapsulate_response(resp, ohttp_response).await?;
+        let (mut channel_writer, channel_reader) = async_rw::create_channel_pair_with_size(1024);
+        // Read from the channel and perform the OHTTP decryption
+        // The decrypted cleartext is then can read from response_read
+        let response_read = client_request
+            .response(channel_reader)
+            .map_err(|_| anyhow!("Failed to set response".to_string()))?;
+
+        let resp_stream = response.bytes_stream();
+        // Spawn a task to read from the http response stream (aka ohttp encrypted content)
+        // and write them via the pipe channel.
+        // The ohttp decryption is performed by reading from the pipe channel.
+        tokio::spawn(async move {
+            let mut resp_stream = Box::pin(resp_stream);
+            while let Some(bytes_chunk) = resp_stream.next().await {
+                match bytes_chunk {
+                    Ok(chunk) => {
+                        if let Err(e) = channel_writer.write_all(&chunk).await {
+                            error!("Failed to write chunk: {}", e);
+                            break;
+                        }
+                    }
+                    Err(e) => {
+                        error!("Error from ohttp response stream: {}", e);
+                        break;
+                    }
+                }
+            }
+
+            let _ = channel_writer.close().await;
+        });
+
+        Ok(Box::pin(futures::stream::unfold(
+            response_read,
+            |mut response_read| {
+                Box::pin(async move {
+                    let mut buffer = vec![0; 1024];
+                    // ohttp decryption is performed via the read here.
+                    match response_read.read(&mut buffer).await {
+                        Ok(0) => None, // EOF or disconnect from right-side (aka relay/gateway/llm server)
+                        Ok(n) => Some((Ok(Bytes::copy_from_slice(&buffer[..n])), response_read)),
+                        Err(e) => {
+                            error!("OHTTP decryption failed: {}", e);
+                            Some((Err(anyhow::Error::from(e)), response_read))
+                        }
+                    }
+                })
+            },
+        )))
+    }
+
+    async fn ohttp_post<V: DeserializeOwned>(
+        &self,
+        target_server: &str,
+        path: &str,
+        headers: Option<HeaderMap>,
+        body: Option<Vec<u8>>,
+    ) -> Result<Option<V>> {
+        let mut bytes_stream = self
+            .ohttp_post_stream(target_server, path, headers, body)
+            .await?;
+        let mut res = Vec::new();
+        while let Some(result) = bytes_stream.next().await {
+            match result {
+                Ok(chunk) => res.extend_from_slice(&chunk),
+                Err(e) => return Err(e),
+            }
+        }
+
         let api_resp: ApiResponse<V> = serde_json::from_slice(&res)?;
-        api_resp
-            .into_data_or()
-            .map_err(|_| anyhow!("failed to parse api response"))
+        api_resp.data().map_err(|e| e.into())
     }
 }
 
-/// Decapsulate the http response
-async fn decapsulate_response(
-    response: Response,
-    client_response: ClientResponse,
-) -> Result<Vec<u8>> {
-    let enc_response = response.bytes().await?;
-    let response_buf = client_response.decapsulate(&enc_response)?;
-    let response = Message::read_bhttp(&mut std::io::Cursor::new(&response_buf[..]))?;
-    let body = response.content();
-    Ok(body.to_vec())
-}
-
 #[cfg(test)]
-mod tests {}
+mod tests {
+    use super::*;
+    use blind_rsa_signatures::reexports::{
+        hmac_sha512::sha384::Hash,
+        rsa::{Pss, PublicKey, RsaPublicKey},
+    };
+    use num_bigint_dig::BigUint;
+    use types::utils::get_env_or_default;
+    #[test]
+    fn test_config_parser() {
+        let json_data = r#"{
+            "nvidia_verifier": {
+                "type": "Remote",
+                "verifier_url": "https://nras.attestation.nvidia.com/v4/attest"
+            }
+        }"#;
+        let _: verifier::VerifierConfig = serde_json::from_str(json_data).unwrap();
+    }
+
+    #[tokio::test]
+    async fn test_blind_signature() {
+        let client = PvcClient::new(
+            get_env_or_default("IDENTITY_SERVER_URL", "http://localhost:8000"),
+            get_env_or_default("GATEWAY_URL", "http://localhost:8082"),
+            get_env_or_default("RELAY_URL", "http://localhost:8787"),
+            get_env_or_default("TARGET_URL", "localhost:9000"),
+        )
+        .await
+        .unwrap();
+        let (msg, token) = client.get_identity_token(None).await.unwrap();
+        let sig = hex::decode(token).unwrap();
+        let msg = hex::decode(msg).unwrap();
+        let pk = client.fetch_public_key().await.unwrap();
+        let n = BigUint::from_bytes_le(&pk.n);
+        let e = BigUint::from_bytes_le(&pk.e);
+        let rsa_pk = RsaPublicKey::new(n, e).unwrap();
+        let verifying_key = Pss::new::<Hash>();
+        let mut hash = Hash::new();
+        hash.update(msg);
+        let hashd = hash.finalize();
+        rsa_pk.verify(verifying_key, &hashd, &sig).unwrap();
+    }
+}
