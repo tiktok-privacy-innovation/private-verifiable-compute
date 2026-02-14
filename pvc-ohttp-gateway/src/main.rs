@@ -12,9 +12,10 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+mod handlers; // forked from ohttp-gateway
+
 use axum::{Router, middleware as axum_middleware, routing};
 use ohttp_gateway::config::{AppConfig, LogFormat};
-use ohttp_gateway::handlers;
 use ohttp_gateway::middleware;
 use ohttp_gateway::state::AppState;
 use std::net::SocketAddr;
@@ -30,8 +31,10 @@ use tracing::{info, warn};
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Load configuration first
-    let config = AppConfig::from_env()?;
-
+    let mut config = AppConfig::from_env()?;
+    if let Ok(port) = std::env::var("PORT") {
+        config.port = format!("[::]:{port}");
+    }
     // Initialize tracing based on config
     initialize_tracing(&config);
 
@@ -115,11 +118,11 @@ fn create_router(app_state: AppState, config: &AppConfig) -> Router {
     const RFC_9540_GATEWAY_PATH: &str = "/.well-known/ohttp-gateway";
     let mut app = Router::new().route(
         RFC_9540_GATEWAY_PATH,
-        routing::post(handlers::ohttp::handle_ohttp_request),
+        routing::post(crate::handlers::handle_stream_ohttp_request),
     );
 
     // Add routes
-    app = app.merge(handlers::routes());
+    app = app.merge(ohttp_gateway::handlers::routes());
 
     // Add middleware layers (order matters - first added is executed last)
     app = app.layer(

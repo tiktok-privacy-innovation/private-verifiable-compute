@@ -14,11 +14,12 @@
 
 use super::ServiceConfig;
 use crate::embedding::EmbeddingModel;
+use crate::request::CleartextPayload;
+use crate::session::Sessions;
 #[cfg(feature = "sqlite")]
 use crate::sqlite_vector_store::SqliteVectorDb;
 use crate::{
     chunking::{Chunking, SimpleChunk},
-    noise::{Sessions, decrypt_with_noise},
     session::Sid,
 };
 use anyhow::Result;
@@ -26,14 +27,12 @@ use lru::LruCache;
 use rig::Embed;
 use rocket::State;
 use rocket::fairing::AdHoc;
-use rocket::serde::json::Json;
 use serde::{Deserialize, Serialize};
 use std::num::NonZeroUsize;
 use std::sync::Arc;
 use tokio::sync::RwLock;
-use types::{
-    ApiCode, ApiResponse, UploadDocumentReq, UploadDocumentResp, new_err, utils::get_env_or_default,
-};
+use tracing::error;
+use types::{ApiCode, ApiResult, UploadDocumentReq};
 
 pub type VectorStores = Arc<RwLock<LruCache<Sid, Box<dyn VectorStore>>>>;
 
@@ -58,105 +57,92 @@ pub fn stage() -> AdHoc {
     })
 }
 
-#[post("/document/upload", data = "<payload>")]
+#[post("/documents", data = "<user_upload>")]
 pub async fn upload_document(
     sessions: &State<Sessions>,
     chunk: &State<Arc<dyn Chunking>>,
     vector_stores: &State<VectorStores>,
     config: &State<ServiceConfig>,
-    payload: Vec<u8>,
+    user_upload: CleartextPayload,
     sid: Sid,
-) -> Result<Json<ApiResponse<UploadDocumentResp>>, ApiResponse<()>> {
-    let user_uploaded = decrypt_with_noise(sessions, &sid, &payload)
-        .await
-        .map_err(|_| new_err(ApiCode::BadRequest, "failed to decrypt user uploaded"))?;
-
-    let req: UploadDocumentReq = serde_json::from_slice(&user_uploaded).map_err(|_| {
-        error!("failed to deserialize uploadDocument request");
-        new_err(
-            ApiCode::BadRequest,
-            "failed to deserialize uploadDocument request",
-        )
-    })?;
-
-    let documents = chunk
-        .chunk(&req.filename, &req.content)
-        .await
-        .map_err(|e| {
-            error!("failed to chunking the file {:?}", e);
-            new_err(ApiCode::BadRequest, "failed to chunking the file")
-        })?;
-
-    let encryption_key = {
-        let sessions = sessions.write().await;
-        let session = sessions.get(&sid).unwrap();
-        session.get_encryption_key().ok_or(new_err(
-            ApiCode::InternalServerError,
-            "encryption key is none for this session",
-        ))?
-    };
-
-    let _hashed_key = encryption_key.hash();
-
-    {
-        let mut vector_stores = vector_stores.write().await;
-        if let Some(vector_store) = vector_stores.get(&sid) {
-            vector_store.insert_document(documents).await.map_err(|e| {
-                error!(
-                    "failed to insert document to sqlite vector store {}",
-                    e.to_string()
-                );
-                new_err(
-                    ApiCode::InternalServerError,
-                    "failed to insert document to sqlite vector store",
-                )
+) -> ApiResult<()> {
+    let logic = async || -> Result<(), ApiCode> {
+        let req: UploadDocumentReq =
+            serde_json::from_slice(&user_upload.as_bytes()).map_err(|_| {
+                error!("failed to deserialize uploadDocument request");
+                ApiCode::InvalidRequestBody
             })?;
-        } else {
-            #[allow(unused_variables)]
-            let model = EmbeddingModel::new(
-                &get_env_or_default("EMBEDDING_MODEL", &config.embedding_model),
-                get_env_or_default("EMBEDDING_NDIMS", config.ndims.to_string())
-                    .parse()
-                    .unwrap(),
-                &get_env_or_default("EMBEDDING_ENDPOINT", &config.emdedding_endpoint),
-                &config.api_key,
-            );
 
-            #[cfg(feature = "sqlite")]
-            {
-                let db_name = format!("{}.db", _hashed_key);
-                let vector_store =
-                    SqliteVectorDb::new(&db_name, None, model)
-                        .await
-                        .map_err(|e| {
-                            error!(
-                                "failed to create vector store using sqlite {}",
-                                e.to_string()
-                            );
-                            new_err(
-                                ApiCode::InternalServerError,
-                                "failed to create vector store using sqlite",
-                            )
-                        })?;
+        let documents = chunk
+            .chunk(&req.filename, &req.content)
+            .await
+            .map_err(|e| {
+                error!("failed to chunking the file {:?}", e);
+                ApiCode::UnSupportedDocumentFormat
+            })?;
 
-                vector_store.insert_document(documents).await.map_err(|e| {
-                    error!(
-                        "failed to insert document to sqlite vector store {}",
-                        e.to_string()
-                    );
-                    new_err(
-                        ApiCode::InternalServerError,
-                        "failed to insert document to sqlite vector store",
-                    )
-                })?;
+        let context_key = {
+            let session = sessions
+                .get(&sid)
+                .await
+                .map_err(|_| ApiCode::InvalidIdentityToken)?;
+            session
+                .lock()
+                .await
+                .get_context_key()
+                .ok_or(ApiCode::UnkownContextEncryptionKey)?
+        };
 
-                vector_stores.put(sid, Box::new(vector_store));
+        #[allow(unused_variables)]
+        let hashed_key = context_key.hash();
+
+        {
+            let mut vector_stores = vector_stores.write().await;
+
+            if vector_stores.get(&sid).is_none() {
+                #[allow(unused_variables)]
+                let model = EmbeddingModel::new(
+                    &config.embedding_model,
+                    config.ndims,
+                    &config.emdedding_endpoint,
+                    &config.api_key,
+                );
+
+                #[cfg(feature = "sqlite")]
+                {
+                    let db_name = format!("{}.db", hashed_key);
+                    let vector_store =
+                        SqliteVectorDb::new(&db_name, None, model)
+                            .await
+                            .map_err(|e| {
+                                error!(
+                                    error = %e,
+                                    "failed to create vector store using sqlite",
+                                );
+                                ApiCode::VectorStoreError
+                            })?;
+                    vector_stores.put(sid.clone(), Box::new(vector_store));
+                }
+            }
+
+            if let Some(vector_store) = vector_stores.get(&sid) {
+                #[cfg(feature = "sqlite")]
+                {
+                    vector_store.insert_document(documents).await.map_err(|e| {
+                        error!(
+                            error = %e,
+                            "failed to insert document to sqlite vector store",
+                        );
+                        ApiCode::VectorStoreError
+                    })?;
+                }
+            } else {
+                return Err(ApiCode::VectorStoreError);
             }
         }
-    }
-    Ok(Json(ApiResponse {
-        code: ApiCode::Success as i32,
-        message: String::new(),
-        data: Some(UploadDocumentResp {}),
-    }))
+
+        Ok(())
+    };
+
+    logic().await.into()
 }

@@ -5,11 +5,12 @@ license = "Apache-2.0"
 edition.workspace = true
 
 [features]
-default = ["attestation"]
-attestation = [ "dep:verifier" ]
+default = ["noise", "attestation"]
+attestation = ["dep:verifier"]
+noise = []
 
 [dependencies]
-async-trait =  { workspace = true }
+async-trait = { workspace = true }
 anyhow = { workspace = true }
 tracing = { workspace = true }
 tokio = { workspace = true }
@@ -22,14 +23,27 @@ ohttp_wrap = { workspace = true }
 hex = { workspace = true }
 futures-util = { workspace = true }
 futures = { workspace = true }
+bytes = { workspace = true }
 sha2 = { workspace = true }
 noise = { workspace = true }
 rand = { workspace = true }
+rand_core = { workspace = true }
 tracing-subscriber = { workspace = true }
 serde_json = { workspace = true }
 serde = { workspace = true }
 rocket = { workspace = true }
 p256 = { workspace = true }
 oauth = { workspace = true }
+ohttp = { version = "0.7.0" }
+pin-project = { version = "1.1" }
+reqwest = { workspace = true }
+async-stream = { version = "0.3.6" }
+tokio-util = { version = "0.7", features = ["codec", "io"] }
+verifier = { git = "https://github.com/confidential-containers/trustee", rev = "f342a12", features = [
+  "tdx-verifier",
+  "nvidia-verifier",
+], optional = true }
 
-verifier = { git = "https://github.com/confidential-containers/trustee", rev = "6d1dcfb", features = ["tdx-verifier", "nvidia-verifier"], optional = true}
+[dev-dependencies]
+blind-rsa-signatures = { workspace = true }
+num-bigint-dig = "0.8.4"

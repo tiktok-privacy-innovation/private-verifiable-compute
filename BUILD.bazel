@@ -63,11 +63,6 @@ multirun(
     ],
 )
 
-config_setting(
-    name = "feat_attestation_off",
-    define_values = {"attestation": "off"},
-)
-
 alias(
     name = "rustfmt",
     actual = "@rules_rust//tools/upstream_wrapper:rustfmt",

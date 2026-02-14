@@ -49,6 +49,18 @@ pub struct EmbeddingModel {
 impl embeddings::EmbeddingModel for EmbeddingModel {
     const MAX_DOCUMENTS: usize = 1024;
 
+    type Client = reqwest::Client;
+
+    fn make(client: &Self::Client, model: impl Into<String>, dims: Option<usize>) -> Self {
+        Self {
+            base_url: String::new(),
+            api_key: String::new(),
+            client: client.clone(),
+            model: model.into(),
+            ndims: dims.unwrap_or(4096),
+        }
+    }
+
     fn ndims(&self) -> usize {
         self.ndims
     }

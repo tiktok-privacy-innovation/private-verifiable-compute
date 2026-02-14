@@ -22,7 +22,7 @@ use std::path::Path;
 use std::sync::Arc;
 use tokio::sync::RwLock;
 use tracing::info;
-use types::{ApiCode, ApiResponse, keys::EncryptionKey};
+use types::{ApiCode, ApiResponse, keys::ContextKey};
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct AuthConfig {
@@ -78,7 +78,7 @@ pub async fn login_with_oauth_token(
     oauth_token: &State<Arc<RwLock<Option<String>>>>,
     client: &State<Arc<RwLock<PvcClient>>>,
     payload: String,
-    key: &State<EncryptionKey>,
+    key: &State<ContextKey>,
 ) -> Result<Json<ApiResponse<()>>, Status> {
     let req: OauthLoginRequest = serde_json::from_str(&payload).map_err(|_| Status::BadRequest)?;
 

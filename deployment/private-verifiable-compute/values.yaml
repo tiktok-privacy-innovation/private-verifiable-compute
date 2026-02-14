@@ -349,14 +349,14 @@ teeLlm:
 
   affinity: {}
 
-  llmModel: Qwen/Qwen3-8B
+  llmModel: Qwen/Qwen3-VL-30B-A3B-Thinking-FP8
   llmPort: 8000
   embeddingModel: Qwen/Qwen3-Embedding-8B
   embeddingPort: 8001
   embeddingNdims: 4096
   llmMaxToken: 28672
   llmArgs: 
-    - "vllm serve $LLM_MODEL --port $LLM_PORT"
+    - "vllm serve $LLM_MODEL --port $LLM_PORT --reasoning-parser deepseek_r1 --stream-interval 5"
   embeddingArgs:
     - "vllm serve $EMBEDDING_MODEL --port $EMBEDDING_PORT"
 client:

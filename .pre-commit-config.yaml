@@ -1,25 +1,27 @@
 repos:
+-   repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v4.6.0
+    hooks:
+    -   id: check-merge-conflict
+    -   id: end-of-file-fixer
+    -   id: trailing-whitespace
+
+-   repo: local
+    hooks:
+    -   id: cargo-fmt
+        name: cargo fmt (local)
+        description: cargo fmt
+        entry: cargo fmt
+        language: system
+        types: [rust]     # for rust files only
+        args: [--, --check]
+        pass_filenames: true
+        stages: [pre-commit]
+
 -   repo: https://github.com/macisamuele/language-formatters-pre-commit-hooks
     rev: v2.15.0
     hooks:
-    -   id: pretty-format-rust
-        types: [rust]
-        args: [--autofix]
     -   id: pretty-format-yaml
         types: [yaml]
         args: [--indent, '4', --autofix]
-# - repo: local
-#   hooks:
-#   - id: cargo-clippy-fix-unused-imports
-#     name: cargo clippy (fix unused imports)
-#     types: [rust]
-#     entry: >-
-#       cargo clippy
-#       --fix
-#       --allow-staged
-#       --allow-dirty
-#       --
-#       -D unused_imports
-#     language: system
-#     pass_filenames: false
-#     stages: [pre-commit]
+        stages: [pre-commit]

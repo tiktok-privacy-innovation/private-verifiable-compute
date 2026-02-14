@@ -120,14 +120,14 @@ apt = use_extension(
 apt.install(
     name = "bookworm",
     lock = "//dependencies:bookworm.lock.json",
-    manifest = "//dependencies:bookworm_manifest",
+    manifest = "//dependencies:bookworm.yaml",
 )
 use_repo(apt, "bookworm")
 
 apt.install(
     name = "jammy",
     lock = "//dependencies:jammy.lock.json",
-    manifest = "//dependencies:jammy_manifest",
+    manifest = "//dependencies:jammy.yaml",
 )
 use_repo(apt, "jammy")
 

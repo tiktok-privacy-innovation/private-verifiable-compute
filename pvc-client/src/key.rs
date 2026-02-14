@@ -21,17 +21,17 @@ use std::io::Read;
 use std::io::Write;
 use std::os::unix::fs::OpenOptionsExt;
 use std::path::PathBuf;
-use types::keys::EncryptionKey;
+use types::keys::ContextKey;
 
 const PVC_ROOT_DIR: &str = ".pvc";
 const KEY_FILE: &str = "secret";
-pub fn create_or_get_encryption_key() -> Result<EncryptionKey> {
+pub fn create_or_get_encryption_key() -> Result<ContextKey> {
     let path = key_path_in_home()?;
     if path.exists() {
         let mut file = fs::File::open(&path)?;
         let mut buf = Vec::new();
         file.read_to_end(&mut buf)?;
-        return Ok(EncryptionKey(buf));
+        return Ok(ContextKey(buf));
     }
 
     if let Some(dir) = path.parent() {
@@ -49,7 +49,7 @@ pub fn create_or_get_encryption_key() -> Result<EncryptionKey> {
     file.write_all(&key)?;
     file.sync_all()?;
 
-    Ok(EncryptionKey(key))
+    Ok(ContextKey(key))
 }
 
 fn key_path_in_home() -> Result<PathBuf> {

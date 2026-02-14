@@ -15,11 +15,15 @@
 use anyhow::Result;
 use async_trait::async_trait;
 pub use bhttp::{Message, Mode};
+use bytes::Bytes;
+use futures::stream::Stream;
 pub use ohttp::Error;
 pub use ohttp::{ClientRequest, ClientResponse, KeyConfig};
 use reqwest::IntoUrl;
 use reqwest::header::HeaderMap;
 use serde::de::DeserializeOwned;
+use std::pin::Pin;
+
 #[async_trait]
 pub trait OhttpClient {
     async fn ohttp_initialize<U>(ohttp_gateway_url: U) -> Result<KeyConfig>
@@ -31,5 +35,15 @@ pub trait OhttpClient {
         path: &str,
         headers: Option<HeaderMap>,
         body: Option<Vec<u8>>,
-    ) -> Result<V>;
+    ) -> Result<Option<V>>;
+
+    /// Post to the target server using OHTTP while wait the response in the streaming mode.
+    /// The return byte stream is already decrypted from OHTTP and may contain errors.
+    async fn ohttp_post_stream(
+        &self,
+        target_server: &str,
+        path: &str,
+        headers: Option<HeaderMap>,
+        body: Option<Vec<u8>>,
+    ) -> Result<Pin<Box<dyn Stream<Item = Result<Bytes>> + Send>>>;
 }

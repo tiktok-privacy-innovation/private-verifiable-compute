@@ -12,163 +12,81 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::session::{Session, Sid};
+use crate::request::{CleartextPayload, IdentityToken};
+use crate::session::{Sessions, Sid};
 use anyhow::Result;
-use base64::{Engine, prelude::BASE64_STANDARD};
+use base64::Engine;
+use blind_rsa_signatures::reexports::rsa::RsaPublicKey;
+use num_bigint_dig::BigUint;
 use p256::ecdsa::signature::SignerMut;
 use p256::ecdsa::{Signature, SigningKey};
-use rocket::async_trait;
+use rocket::State;
 use rocket::fairing::AdHoc;
-use rocket::http::Status;
-use rocket::serde::json::Json;
-use rocket::{
-    Request, State,
-    outcome::Outcome,
-    request::{self, FromRequest},
-};
-use std::collections::HashMap;
 use std::sync::Arc;
-use tokio::sync::Mutex;
-use tokio::sync::RwLock;
+use tokio::sync::{Mutex, RwLock};
 use tracing::{error, info};
-use types::keys::EncryptionKey;
-use types::{ApiCode, ApiResponse, EmptyResp, HandShakeResp, new_err};
-use uuid::Uuid;
+use types::ApiResponse;
+use types::keys::PublicKeyFields;
+use types::{ApiCode, ApiResult, HandShakeResp, keys::ContextKey};
 
-pub type Sessions = Arc<RwLock<HashMap<Sid, Session>>>;
-#[allow(dead_code)]
-pub struct IdentityToken(String);
+/// Identity server RSA public key, shared and periodically refreshed.
+pub type IdPubkey = Arc<RwLock<RsaPublicKey>>;
 
-#[derive(Debug)]
-#[allow(dead_code)]
-pub enum HeaderError {
-    MissingIdentityToken,
-    MissingSessionId,
-    InvalidSessionId,
-}
-
-impl IdentityToken {
-    pub fn verify(&self) -> Result<()> {
-        Ok(())
-    }
-}
-
-#[async_trait]
-impl<'r> FromRequest<'r> for IdentityToken {
-    type Error = HeaderError;
-
-    async fn from_request(request: &'r Request<'_>) -> request::Outcome<Self, Self::Error> {
-        let token = request.headers().get_one("X-Identity-Token");
-        match token {
-            Some(token) => {
-                info!("identity token {}", token);
-                Outcome::Success(IdentityToken(token.to_string()))
-            }
-            None => Outcome::Error((Status::Unauthorized, Self::Error::MissingIdentityToken)),
-        }
-    }
-}
-
-#[async_trait]
-impl<'r> FromRequest<'r> for Sid {
-    type Error = HeaderError;
-
-    async fn from_request(request: &'r Request<'_>) -> request::Outcome<Self, Self::Error> {
-        let sid = request.headers().get_one("X-Session-Id");
-        match sid {
-            Some(s) => Uuid::parse_str(s).map_or_else(
-                |_e| Outcome::Error((Status::BadRequest, Self::Error::MissingSessionId)),
-                |uuid| Outcome::Success(Sid::new(uuid)),
-            ),
-            None => Outcome::Error((Status::BadRequest, Self::Error::MissingSessionId)),
-        }
-    }
-}
-
-pub fn stage() -> AdHoc {
-    AdHoc::on_ignite("Noise Server", |rocket| async {
-        rocket.manage(Sessions::default())
-    })
-}
-
-#[post("/noise", data = "<payload>")]
-pub async fn handshake(
+#[post("/establish", data = "<payload>")]
+pub async fn establish(
     sessions: &State<Sessions>,
     signing_key: &State<Mutex<SigningKey>>,
+    id_pubkey: &State<IdPubkey>,
     payload: Vec<u8>,
     token: IdentityToken,
     sid: Sid,
-) -> Result<Json<ApiResponse<HandShakeResp>>, Status> {
-    // verify identity token
-    token.verify().map_err(|e| {
-        error!(error=%e);
-        Status::Unauthorized
-    })?;
-
-    let decoded_payload = BASE64_STANDARD.decode(&payload).map_err(|e| {
-        error!(error=%e);
-        Status::BadRequest
-    })?;
-
-    let mut session_lock = sessions.write().await;
-
-    match session_lock.remove(&sid) {
-        Some(s) => {
-            let (session, resp_data) = s.handshake(&decoded_payload).map_err(|e| {
-                error!(error=%e, "failed to noise handshake init");
-                Status::InternalServerError
-            })?;
-            session_lock.insert(sid.clone(), session);
-
-            // sign the noise payload
-            let mut signing_key = signing_key.lock().await;
-            let signature: Vec<u8> =
-                sign_noise_script(&mut signing_key, &decoded_payload, &resp_data);
-            Ok(Json(ApiResponse {
-                code: ApiCode::Success as i32,
-                message: String::new(),
-                data: Some(HandShakeResp {
-                    data: resp_data,
-                    signature,
-                }),
-            }))
-        }
-        None => {
-            error!("failed to found session, sid = {}", sid.to_string());
-            Err(Status::BadRequest)
-        }
-    }
-}
-
-#[post("/key/upload", data = "<payload>")]
-pub async fn upload_key(
-    sessions: &State<Sessions>,
-    payload: Vec<u8>,
-    sid: Sid,
-) -> Result<Json<ApiResponse<EmptyResp>>, Json<ApiResponse<()>>> {
-    let decoded_payload = BASE64_STANDARD
-        .decode(&payload)
-        .map_err(|_| Json(new_err(ApiCode::BadRequest, "data is not base64 encoded")))?;
-
-    let encryption_key = decrypt_with_noise(sessions, &sid, &decoded_payload)
-        .await
-        .map_err(|_| {
-            Json(new_err(
-                ApiCode::BadRequest,
-                "failed to decrypt encryption key",
-            ))
+) -> ApiResult<HandShakeResp> {
+    let logic = async || -> Result<HandShakeResp, ApiCode> {
+        let pk = id_pubkey.read().await;
+        token.verify(&*pk).map_err(|e| {
+            error!(error=%e, "failed to verify identity token");
+            ApiCode::InvalidIdentityToken
         })?;
 
-    let mut sessions = sessions.write().await;
-    if let Some(s) = sessions.get_mut(&sid) {
-        s.set_encryption_key(EncryptionKey::new(&encryption_key));
-    }
+        match sessions.get(&sid).await {
+            Ok(s) => {
+                let mut s = s.lock().await;
+                let resp_data = s.establish(&payload).map_err(|e| {
+                    error!(error=%e, "failed to noise handshake init");
+                    ApiCode::NoiseHandShakeFailed
+                })?;
 
-    Ok(Json(ApiResponse {
-        code: ApiCode::Success as i32,
-        message: String::new(),
-        data: Some(EmptyResp {}),
-    }))
+                // sign the noise payload
+                let mut signing_key = signing_key.lock().await;
+                let signature: Vec<u8> = sign_noise_script(&mut signing_key, &payload, &resp_data);
+                Ok(HandShakeResp {
+                    data: resp_data,
+                    signature,
+                })
+            }
+            Err(_) => Err(ApiCode::InvalidSessionId),
+        }
+    };
+
+    logic().await.into()
+}
+
+#[post("/keys", data = "<context_key>")]
+pub async fn upload_key(
+    sessions: &State<Sessions>,
+    context_key: CleartextPayload,
+    sid: Sid,
+) -> ApiResult<()> {
+    let logic = async || -> Result<(), ApiCode> {
+        let session = sessions
+            .get(&sid)
+            .await
+            .map_err(|_| ApiCode::InvalidSessionId)?;
+        let mut session = session.lock().await;
+        session.set_context_key(ContextKey::new(context_key.as_bytes()));
+        Ok(())
+    };
+    logic().await.into()
 }
 
 pub fn sign_noise_script(signing_key: &mut SigningKey, e: &[u8], ee: &[u8]) -> Vec<u8> {
@@ -180,36 +98,64 @@ pub fn sign_noise_script(signing_key: &mut SigningKey, e: &[u8], ee: &[u8]) -> V
     signature.to_vec()
 }
 
-pub async fn decrypt_with_noise(
-    sessions: &State<Sessions>,
-    sid: &Sid,
-    ciphertext: &[u8],
-) -> Result<Vec<u8>, Status> {
-    match sessions.write().await.get_mut(sid) {
-        Some(s) => s.decrypt(ciphertext).map_err(|_| {
-            error!("failed to decrypt ciphertext, sid = {}", sid.to_string());
-            Status::InternalServerError
-        }),
-        None => {
-            error!("failed to found session, sid = {}", sid.to_string());
-            Err(Status::BadRequest)
-        }
-    }
+/// Interval in seconds between identity server pubkey refreshes.
+const PUBKEY_REFRESH_INTERVAL_SECS: u64 = 300;
+
+async fn fetch_identity_pubkey(url: &str) -> Result<RsaPublicKey, String> {
+    let client = reqwest::Client::new();
+    let resp = client
+        .get(url)
+        .send()
+        .await
+        .map_err(|e| format!("request failed: {}", e))?;
+    let body = resp
+        .bytes()
+        .await
+        .map_err(|e| format!("read body failed: {}", e))?;
+    let api_resp: ApiResponse<PublicKeyFields> =
+        serde_json::from_slice(&body).map_err(|e| format!("parse response failed: {}", e))?;
+    let pubkey_fields = api_resp
+        .data()
+        .map_err(|e| format!("pubkey parse error: {:?}", e))?
+        .ok_or("identity server pubkey data missing")?;
+    let n_bytes = base64::engine::general_purpose::STANDARD
+        .decode(&pubkey_fields.n)
+        .map_err(|e| format!("invalid pubkey n base64: {}", e))?;
+    let e_bytes = base64::engine::general_purpose::STANDARD
+        .decode(&pubkey_fields.e)
+        .map_err(|e| format!("invalid pubkey e base64: {}", e))?;
+    let n = BigUint::from_bytes_le(&n_bytes);
+    let e = BigUint::from_bytes_le(&e_bytes);
+    RsaPublicKey::new(n, e).map_err(|e| format!("invalid RSA pubkey components: {}", e))
 }
 
-pub async fn encrypt_with_noise(
-    sessions: &State<Sessions>,
-    sid: &Sid,
-    plaintext: &[u8],
-) -> Result<Vec<u8>, Status> {
-    match sessions.write().await.get_mut(sid) {
-        Some(s) => s.encrypt(plaintext).map_err(|_| {
-            error!("failed to encrypt, sid = {}", sid.to_string());
-            Status::InternalServerError
-        }),
-        None => {
-            error!("failed to found session, sid = {}", sid.to_string());
-            Err(Status::BadRequest)
-        }
-    }
+pub fn stage(identity_server_url: String) -> AdHoc {
+    AdHoc::on_ignite("Fetch identity server RSA pubkey", |rocket| async move {
+        let url = format!("{}/pubkey", identity_server_url.trim_end_matches('/'));
+        let rsa_public_key = fetch_identity_pubkey(&url)
+            .await
+            .expect("failed to fetch identity server pubkey at startup");
+        let id_pubkey: IdPubkey = Arc::new(RwLock::new(rsa_public_key));
+        let id_pubkey_clone = Arc::clone(&id_pubkey);
+
+        tokio::spawn(async move {
+            let mut interval =
+                tokio::time::interval(std::time::Duration::from_secs(PUBKEY_REFRESH_INTERVAL_SECS));
+            interval.tick().await;
+            loop {
+                interval.tick().await;
+                match fetch_identity_pubkey(&url).await {
+                    Ok(new_key) => {
+                        *id_pubkey_clone.write().await = new_key;
+                        info!("identity server pubkey refreshed");
+                    }
+                    Err(e) => {
+                        error!(error=%e, "failed to refresh identity server pubkey");
+                    }
+                }
+            }
+        });
+
+        rocket.manage(id_pubkey)
+    })
 }

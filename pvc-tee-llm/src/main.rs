@@ -16,21 +16,20 @@
 extern crate rocket;
 
 mod attestation;
-mod cache;
-mod cache_redis;
 mod chat;
 mod chunking;
 mod embedding;
 mod fairing;
-#[cfg(feature = "attestation")]
 mod gpu_attester;
 mod inference;
 mod noise;
 mod rag;
+mod request;
 mod session;
 
 #[cfg(feature = "sqlite")]
 mod sqlite_vector_store;
+
 use fairing::HeaderLogger;
 use p256::ecdsa::SigningKey;
 use rand_core::OsRng;
@@ -42,8 +41,9 @@ use rusqlite::ffi::{sqlite3, sqlite3_api_routines, sqlite3_auto_extension};
 use sqlite_vec::sqlite3_vec_init;
 use tokio::sync::Mutex;
 use tracing_subscriber::filter::{EnvFilter, LevelFilter};
+use types::{ApiResult, utils::get_env_or_default};
 
-#[derive(Debug, Deserialize, Serialize)]
+#[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(crate = "rocket::serde")]
 struct ServiceConfig {
     system_prompt: String,
@@ -53,20 +53,33 @@ struct ServiceConfig {
     max_tokens: u32,
     embedding_model: String,
     emdedding_endpoint: String,
-    redis_endpoint: String,
     ndims: usize,
     api_key: String,
-
-    handshake: String,
-    inference: String,
-    health: String,
-    attestation: String,
-    attestation_with_nonce: String,
+    api: String,
+    identity_server_url: String,
 }
 
-#[get("/")]
-fn health() -> &'static str {
-    ""
+impl ServiceConfig {
+    pub fn overwrite_from_env(&mut self) {
+        self.llm_model = get_env_or_default("LLM_MODEL", &self.llm_model);
+        self.llm_endpoint = get_env_or_default("LLM_ENDPOINT", &self.llm_endpoint);
+        self.embedding_model = get_env_or_default("EMBEDDING_MODEL", &self.embedding_model);
+        self.emdedding_endpoint =
+            get_env_or_default("EMBEDDING_ENDPOINT", &self.emdedding_endpoint);
+        self.ndims = get_env_or_default("EMBEDDING_NDIMS", self.ndims.to_string())
+            .parse()
+            .unwrap();
+        self.max_tokens = get_env_or_default("LLM_MAX_TOKEN", self.max_tokens.to_string())
+            .parse()
+            .unwrap();
+        self.identity_server_url =
+            get_env_or_default("IDENTITY_SERVER_URL", &self.identity_server_url)
+    }
+}
+
+#[get("/health")]
+fn health() -> ApiResult<()> {
+    ApiResult::Ok(())
 }
 
 #[cfg(feature = "sqlite")]
@@ -88,7 +101,8 @@ fn rocket() -> _ {
     let figment = rocket.figment();
 
     // load the routing configuration
-    let config: ServiceConfig = figment.extract().expect("llm config");
+    let mut config: ServiceConfig = figment.extract().expect("llm config");
+    config.overwrite_from_env();
 
     #[cfg(feature = "sqlite")]
     unsafe {
@@ -98,28 +112,30 @@ fn rocket() -> _ {
     }
 
     rocket
-        .attach(noise::stage())
+        .manage(config.clone())
+        .attach(session::stage())
+        .attach(noise::stage(config.identity_server_url.clone()))
         .attach(HeaderLogger)
         .attach(rag::stage())
         .attach(chat::stage(
-            &config.redis_endpoint,
             &config.system_prompt,
-            Some(config.max_tokens as usize),
-            Some(&config.llm_model),
-            Some(&config.llm_endpoint),
+            config.max_tokens as usize,
+            &config.llm_endpoint,
+            &config.llm_model,
         ))
-        .attach(AdHoc::config::<ServiceConfig>())
         .attach(AdHoc::on_ignite("Init signing key", |rocket| async {
             let signing_key = SigningKey::random(&mut OsRng);
             rocket.manage(Mutex::new(signing_key))
         }))
-        .mount("/", routes![noise::upload_key, rag::upload_document])
-        .mount(config.handshake, routes![noise::handshake])
-        .mount(config.inference, routes![inference::inference])
-        .mount(config.health, routes![health])
-        .mount(config.attestation, routes![attestation::attestation])
+        .mount(&config.api, routes![noise::upload_key, noise::establish])
+        .mount(&config.api, routes![rag::upload_document])
+        .mount(&config.api, routes![inference::chat_completions])
+        .mount("/", routes![health])
         .mount(
-            config.attestation_with_nonce,
-            routes![attestation::attestation_with_nonce],
+            &config.api,
+            routes![
+                attestation::handshake_with_attestation,
+                attestation::attestation
+            ],
         )
 }
