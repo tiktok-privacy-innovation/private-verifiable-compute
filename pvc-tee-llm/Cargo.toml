@@ -35,7 +35,12 @@ regex = "1.12.2"
 handlebars = "6.3.2"
 futures = { workspace = true }
 bytes = { workspace = true }
-attester = { git = "https://github.com/confidential-containers/guest-components", features = [
+# NOTE: this `attester` rev MUST stay schema-compatible with the
+# `verifier` rev pinned in `common/pvc-client-core/Cargo.toml`. They live
+# in different upstream repos (`guest-components` vs `trustee`) but
+# exchange evidence/claim shapes on the wire, so bumping one side
+# requires verifying the other still verifies the produced evidence.
+attester = { git = "https://github.com/confidential-containers/guest-components", rev = "dea0fa37f35d05d10af1bf4e7a6ae6ccb2a7d982", features = [
   "tdx-attester",
   "nvidia-attester",
 ] }

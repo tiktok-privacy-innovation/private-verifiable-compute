@@ -73,23 +73,21 @@ pub async fn auth_config(
     }
 }
 
-#[post("/auth/login", data = "<payload>")]
+#[post("/auth/login", format = "json", data = "<request>")]
 pub async fn login_with_oauth_token(
     oauth_token: &State<Arc<RwLock<Option<String>>>>,
     client: &State<Arc<RwLock<PvcClient>>>,
-    payload: String,
+    request: Json<OauthLoginRequest>,
     key: &State<ContextKey>,
 ) -> Result<Json<ApiResponse<()>>, Status> {
-    let req: OauthLoginRequest = serde_json::from_str(&payload).map_err(|_| Status::BadRequest)?;
-
     let mut token = oauth_token.write().await;
-    *token = Some(req.id_token.clone());
+    *token = Some(request.id_token.clone());
 
     // start noise handshake and tee attestation
     let mut pvc_client = client.write().await;
 
     pvc_client
-        .handshake_with_attestation(Some(req.id_token))
+        .handshake_with_attestation(Some(request.id_token.clone()))
         .await
         .map_err(|e| {
             error!("failed to handshake with backend tee {e}");

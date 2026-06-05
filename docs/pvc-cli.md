@@ -38,6 +38,40 @@ cargo run -p pvc-cli -- login \
   --token-env-var PVC_TOKEN
 ```
 
+### Attest
+
+Verify the target server attestation and print the verified claims derived from the normalized attestation contract:
+
+```bash
+cargo run -p pvc-cli -- attest
+```
+
+Emit structured JSON output:
+
+```bash
+cargo run -p pvc-cli -- attest --output json
+```
+
+Provide endpoint overrides for a different target:
+
+```bash
+cargo run -p pvc-cli -- attest \
+  --identity-server-url http://localhost:8000 \
+  --gateway-url http://localhost:8082 \
+  --relay-url http://localhost:8787 \
+  --target-url localhost:9000
+```
+
+Provide an explicit base64 nonce to verify the `/v1/attestation` path:
+
+```bash
+cargo run -p pvc-cli -- attest --nonce <base64> --output json
+```
+
+When `--nonce` is omitted, the CLI uses the authenticated handshake flow and prints the verified claim set produced by the normalized handshake contract. When `--nonce` is provided, it exercises the explicit `/v1/attestation` contract, which expects a JSON request containing a base64-encoded 64-byte nonce.
+
+On Minikube or other non-TEE environments, this command can still succeed if the server falls back to sample attestation evidence.
+
 ### Chat
 
 Run `pvc-cli chat` with no prompt arguments to start an interactive conversation loop in the terminal:
@@ -91,7 +125,7 @@ cargo run -p pvc-cli -- session clear
 - `profile.json` stores endpoint configuration.
 - `session.json` stores the active session metadata and redacted auth state.
 
-Run `pvc-cli login` before using `chat`, `upload`, or `session show`.
+Run `pvc-cli login` before using `attest`, `chat`, `upload`, or `session show`.
 
 ## Current limitations
 

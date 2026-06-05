@@ -32,8 +32,14 @@ rand_core = { workspace = true }
 serde_json = { workspace = true }
 serde = { workspace = true }
 p256 = { workspace = true }
+kbs-types = { workspace = true }
 reqwest = { workspace = true }
 tokio-util = { version = "0.7", features = ["codec", "io"] }
+# NOTE: this `verifier` rev MUST stay schema-compatible with the
+# `attester` rev pinned in `pvc-tee-llm/Cargo.toml`. They live in
+# different upstream repos (`trustee` vs `guest-components`) but exchange
+# evidence/claim shapes on the wire, so bumping one side requires
+# verifying the other still verifies the produced evidence.
 verifier = { git = "https://github.com/confidential-containers/trustee", rev = "f342a12", features = [
   "tdx-verifier",
   "nvidia-verifier",

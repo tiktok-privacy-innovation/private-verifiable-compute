@@ -200,6 +200,16 @@ teeLlm:
   llmMaxToken: 0
   llmArgs: []
   embeddingArgs: []
+  # When true, pvc-tee-llm sets `ENABLE_SAMPLE_DEVICE=1` so the upstream
+  # attester's `Tee::SampleDevice` fallback is picked up by
+  # `detect_attestable_devices()`. Combined with the attester crate's
+  # automatic `Tee::Sample` CPU fallback when no TDX is present, this
+  # produces a fully-shaped attestation response (CPU + one device) on
+  # hardware with neither TDX nor a CC-enabled NVIDIA GPU (e.g. minikube
+  # demos and laptops). The matching upstream verifiers in
+  # `pvc-client-core` accept the produced sample evidence end-to-end.
+  # MUST stay false outside dev/demo overlays.
+  sampleAttestation: false
 
 client:
   image:

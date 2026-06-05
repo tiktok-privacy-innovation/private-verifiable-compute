@@ -840,7 +840,7 @@ function App() {
                                     <span className="tooltip-value">
                                         {teeInfo?.gpu?.[
                                             "x-nvidia-gpu-attestation-report-cert-chain-fwid-match"
-                                        ].toString?.() ?? ""}
+                                        ]?.toString?.() ?? ""}
                                     </span>
                                 </div>
                                 <div className="tooltip-row">
@@ -850,7 +850,7 @@ function App() {
                                     <span className="tooltip-value">
                                         {teeInfo?.gpu?.[
                                             "x-nvidia-gpu-attestation-report-nonce-match"
-                                        ].toString?.() ?? ""}
+                                        ]?.toString?.() ?? ""}
                                     </span>
                                 </div>
                                 <div className="tooltip-row">

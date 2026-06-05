@@ -1,4 +1,6 @@
 platform: gke
+oauth:
+  oauthType: disable
 
 privacyGateway:
   service:

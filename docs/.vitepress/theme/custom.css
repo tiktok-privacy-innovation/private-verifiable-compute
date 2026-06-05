@@ -1,0 +1,45 @@
+/* Custom theme overrides for the Private Verifiable Compute docs site. */
+
+/*
+ * Widen the hero block on the home page so long titles such as
+ * "Private Verifiable Compute" can render on a single line at large
+ * breakpoints. The default VitePress hero caps `.main` at 592px which
+ * forces the title to wrap or shrink.
+ */
+
+
+@media (min-width: 960px) {
+  .VPHome .VPHero .main .name {
+    max-width: 900px;
+  }
+}
+
+@media (min-width: 1440px) {
+  .VPHome .VPHero .main .name {
+    max-width: 1024px;
+  }
+}
+
+@media (min-width: 960px) {
+  .VPHome .VPHero .main .text {
+    max-width: 900px;
+  }
+}
+
+@media (min-width: 1440px) {
+  .VPHome .VPHero .main .text {
+      max-width: 1024px;
+  }
+}
+
+@media (min-width: 960px) {
+  .VPHome .VPHero .main .tagline {
+    max-width: 800px;
+  }
+}
+
+  @media (min-width: 1440px) {
+  .VPHome .VPHero .main .tagline {
+      max-width: 1024px;
+  }
+}

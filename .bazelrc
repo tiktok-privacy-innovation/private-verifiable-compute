@@ -7,3 +7,17 @@ build:clippy --output_groups=+clippy_checks
 # https://bazelbuild.github.io/rules_rust/rust_fmt.html
 build:rustfmt --aspects=@rules_rust//rust:defs.bzl%rustfmt_aspect
 build:rustfmt --output_groups=+rustfmt_checks
+
+# OCI images target linux/amd64 (optional on macOS; CI runners are usually linux/amd64).
+build:oci_linux_amd64 --platforms=//:oci_linux_amd64
+
+# Reproducible OCI image builds (see docs/reproducibility.md).
+# Export SOURCE_DATE_EPOCH=$(git log -1 --pretty=%ct) before building.
+build:reproducible --nostamp
+build:reproducible -c opt
+build:reproducible --action_env=SOURCE_DATE_EPOCH
+build:reproducible --action_env=TZ=UTC
+build:reproducible --action_env=LANG=C
+build:reproducible --action_env=LC_ALL=C
+build:reproducible --incompatible_strict_action_env
+

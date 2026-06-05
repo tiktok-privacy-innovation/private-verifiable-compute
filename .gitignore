@@ -6,5 +6,15 @@ site/*
 bazel-*
 .DS_Store
 .env
+# Bazel cache for building inside a container.
+.pvc-bazel-cache/
 # Added by cargo
 /target
+# Generated frontend bundle; produced by `bazel build //pvc-client/frontend:build`
+# and packaged into the pvc-client image by `//pvc-client:tar`.
+/pvc-client/static/
+# VitePress documentation site artifacts.
+/docs/node_modules/
+/docs/.vitepress/cache/
+/docs/.vitepress/dist/
+/docs/package-lock.json

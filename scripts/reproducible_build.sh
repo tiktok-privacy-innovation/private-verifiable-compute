@@ -14,13 +14,15 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-# Build reproducible executables in a pvc-builder container.
+# Build reproducible service images in a pvc-builder container.
 # The bazel cache is stored in $(pwd)/.pvc-bazel-cache.
-# TODO: also make the container image reproducible.
-# TODO: record variables like container hashes, dependency version numbers.
 
 set -euo pipefail
 
-docker run --rm -v "$(pwd):/workspace" \
+# Set the timestamp and build the image tarballs.
+docker run --rm \
+  -v "$(pwd):/workspace" \
   -v "$(pwd)/.pvc-bazel-cache:/root/.cache/bazel" \
-   pvc-builder
+  -w /workspace \
+  -e SOURCE_DATE_EPOCH="$(git log -1 --pretty=%ct)" \
+  pvc-builder

@@ -22,7 +22,7 @@ use rocket::form::Form;
 use rocket::fs::TempFile;
 use rocket::http::Status;
 use rocket::response::stream::TextStream;
-use rocket::serde::{Deserialize, Serialize};
+use rocket::serde::json::Json;
 use rocket::{Request, State, request::FromRequest};
 use tokio::io::AsyncReadExt;
 use types::http::reqwest::header::{HeaderMap, HeaderName, HeaderValue};
@@ -30,15 +30,10 @@ use types::http::reqwest::header::{HeaderMap, HeaderName, HeaderValue};
 use serde_json::{Value, json};
 use std::str::FromStr;
 use std::sync::Arc;
-use tracing::{error, info};
+use tracing::error;
 
 use tokio::sync::RwLock;
-use types::ApiError;
-
-#[derive(Serialize, Deserialize, Debug)]
-pub struct AttestationRequest {
-    pub nonce: String,
-}
+use types::{ApiError, AttestationRequest};
 
 #[derive(FromForm)]
 pub struct Upload<'f> {
@@ -50,20 +45,16 @@ pub fn health() -> &'static str {
     "ok"
 }
 
-#[post("/attestation", data = "<payload>")]
+#[post("/attestation", format = "json", data = "<request>")]
 pub async fn attestation(
     client: &State<Arc<RwLock<PvcClient>>>,
-    payload: String,
-    oauth_token: &State<Arc<RwLock<Option<String>>>>,
+    request: Json<AttestationRequest>,
 ) -> ServerResponse<Value> {
     let logic = async || -> Result<Value, ApiError> {
-        let req: AttestationRequest = serde_json::from_str(&payload)?;
+        let request = request.into_inner();
         let mut pvc_client = client.write().await;
-        let response = pvc_client
-            .attest(Some(req.nonce), oauth_token.read().await.clone())
-            .await?;
-        info!("{:?}", response);
-        Ok(extract_cpu(&response))
+        let response = pvc_client.attest(Some(request.nonce), None).await?;
+        Ok(extract_claims(&response))
     };
 
     logic().await.into()
@@ -184,19 +175,21 @@ pub async fn upload(
     logic().await.into()
 }
 
-fn extract_cpu(claims: &Claim) -> Value {
+fn extract_claims(claims: &Claim) -> Value {
     let cpu = claims
         .iter()
         .find(|(_val, key)| key == "cpu")
+        .or_else(|| claims.first())
         .map(|(val, _key)| val)
         .unwrap()
         .clone();
     let gpu = claims
         .iter()
         .find(|(_val, key)| key == "gpu")
+        .or_else(|| claims.get(1))
         .map(|(val, _key)| val);
     match gpu {
         Some(gpu) => json!({ "cpu": cpu, "gpu": gpu }),
-        None => json!({ "cpu": cpu}),
+        None => json!({ "cpu": cpu }),
     }
 }

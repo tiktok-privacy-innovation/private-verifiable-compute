@@ -11,6 +11,16 @@ teeLlm:
     - "export OLLAMA_HOST=0.0.0.0:8001; ollama serve & PID=$!; sleep 3; ollama pull qwen3-embedding:0.6b; wait $PID"
   embeddingNdims: 1024
   llmMaxToken: 8192
+  # Minikube has neither TDX nor a CC-enabled Hopper GPU. Setting this flag
+  # makes `pvc-tee-llm` set `ENABLE_SAMPLE_DEVICE=1` so the upstream
+  # `Tee::SampleDevice` attester is engaged and the response carries a
+  # nonce-bound device evidence. The CPU side already falls back to
+  # `Tee::Sample` automatically. Both the corresponding sample verifiers
+  # ship with `common/pvc-client-core` and validate the sample evidence
+  # end-to-end, so `/v1/attestation` and `/api/attestation` return real
+  # CPU + device claims on minikube without requiring a live PCS or NRAS
+  # round-trip. Never enable in GKE/kata overlays.
+  sampleAttestation: true
 
 client:
   service:

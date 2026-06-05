@@ -18,9 +18,12 @@ export type AttestationReport = {
 }
 
 export async function fetchAttestation(nonce: string): Promise<AttestationReport> {
-  const url = `/api/attestation?nonce=${encodeURIComponent(nonce)}`
-  const resp = await fetch(url, { method: 'GET' })
+  const resp = await fetch('/api/attestation', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ nonce }),
+  })
   if (!resp.ok) throw new Error(`attestation failed: ${resp.status}`)
   const json = await resp.json()
-  return json
+  return json?.data ?? json
 }

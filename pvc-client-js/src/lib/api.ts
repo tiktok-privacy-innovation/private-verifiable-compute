@@ -18,6 +18,42 @@ const PATH_HANDSHAKE = '/v1/handshake'
 const PATH_ESTABLISH = '/v1/establish'
 const PATH_CHAT = '/v1/chat/completions'
 
+/**
+ * Backend ApiCode for "the session ID you sent is unknown or expired".
+ * Mirrors `types::ApiCode::InvalidSessionId` (10003) — when the tee-llm
+ * pod restarts or evicts the session, the request guard surfaces this
+ * code in the JSON envelope and the client must re-handshake.
+ */
+const INVALID_SESSION_ID_CODE = 10003
+
+/**
+ * Thrown by `PvcApiClient.chat` (and friends) when the backend rejects
+ * the current `sid`. Used as the sole signal for the single-shot
+ * re-handshake-and-retry path inside `chat`.
+ */
+export class SessionRejectedError extends Error {
+  readonly code: number
+  constructor(message: string, code: number = INVALID_SESSION_ID_CODE) {
+    super(message)
+    this.name = 'SessionRejectedError'
+    this.code = code
+  }
+}
+
+/**
+ * True when an error from the secure-request path indicates that the
+ * server-side `sid` is no longer valid and the client should re-handshake.
+ *
+ * Strict mode: only `SessionRejectedError`. We intentionally do NOT do the
+ * fuzzy "502 / 'InvalidSessionId' substring" match that the Rust client
+ * does — the JS path always goes through the OHTTP gateway which we control
+ * end-to-end, so a structured envelope is always available. Keeping the
+ * detector narrow avoids spurious recovery on unrelated transport blips.
+ */
+export function isSessionRejected(err: unknown): err is SessionRejectedError {
+  return err instanceof SessionRejectedError
+}
+
 /** Trustee attestation service: verifies TEE evidence before proceeding with handshake */
 export type AttestationServiceConfig = {
   /** Base URL of the attestation service. In dev use same-origin proxy to avoid CORS (e.g. /attestation-service/attestation with Vite proxy to real trustee). */
@@ -36,6 +72,36 @@ type PvcApiClientInit = {
   identityToken?: string
   /** If set, attestation report from handshake is sent to this service for verification before Noise handshake */
   attestationService?: AttestationServiceConfig
+}
+
+type ApiResponse<T> = {
+  code?: number
+  message?: string
+  data?: T
+}
+
+type AttestationEvidence = {
+  tee_type: string
+  evidence: unknown
+}
+
+type AttestationEnvelope = {
+  cpu: AttestationEvidence
+  devices?: AttestationEvidence[]
+}
+
+type BindingMaterial = {
+  handshake_verifying_key: string
+}
+
+type SessionInfo = {
+  id: string
+}
+
+type HandshakeAttestationResponse = {
+  attestation: AttestationEnvelope
+  binding?: BindingMaterial
+  session?: SessionInfo
 }
 
 const baseOrigin =
@@ -111,43 +177,6 @@ function toBase64urlNoPadding(evidence: unknown): string {
   return b64.replace(/\+/g, '-').replace(/\//g, '_').replace(/=/g, '')
 }
 
-/**
- * Decodes report data that can be in hex or base64 format.
- * Expects the decoded data to be exactly 64 bytes long.
- * @param value The report data string to decode
- * @returns Decoded report data as Uint8Array (64 bytes)
- * @throws Error if decoding fails or data length is invalid
- */
-const decodeReportData = (value: string) => {
-  const trimmed = value.trim()
-  if (!trimmed) {
-    throw new Error('Empty report_data')
-  }
-
-  if (/^[0-9a-fA-F]+$/.test(trimmed) && trimmed.length % 2 === 0) {
-    const bytes = new Uint8Array(trimmed.length / 2)
-    for (let i = 0; i < trimmed.length; i += 2) {
-      bytes[i / 2] = Number.parseInt(trimmed.slice(i, i + 2), 16)
-    }
-    if (bytes.length === 64) {
-      return bytes
-    }
-  }
-
-  let decoded: Uint8Array | null = null
-  if (typeof atob === 'function') {
-    const binary = atob(trimmed)
-    decoded = Uint8Array.from(binary, (c) => c.charCodeAt(0))
-  } else if (typeof Buffer !== 'undefined') {
-    decoded = new Uint8Array(Buffer.from(trimmed, 'base64'))
-  }
-
-  if (!decoded || decoded.length !== 64) {
-    throw new Error('Invalid report_data encoding')
-  }
-  return decoded
-}
-
 /** Result from attestation service: JWT token (signed by trustee) and optional parsed payload for display. */
 export type AttestationVerificationResult = {
   /** Raw response (JWT token or JSON body) from attestation service. */
@@ -160,19 +189,6 @@ export type AttestationVerificationResult = {
 
 /** One row for the attestation details table (key-value). */
 export type AttestationDisplayRow = { key: string; value: string }
-
-const TDX_DISPLAY_KEYS: { field: string; label: string }[] = [
-  { field: 'report_data', label: 'Report Data' },
-  { field: 'debug', label: 'Debug' },
-  { field: 'tcb_status', label: 'TCB Status' },
-  { field: 'mr_seam', label: 'MR_SEAM' },
-  { field: 'mr_td', label: 'MR_TD' },
-  { field: 'rtmr0', label: 'RTMR0' },
-  { field: 'rtmr1', label: 'RTMR1' },
-  { field: 'rtmr2', label: 'RTMR2' },
-  { field: 'rtmr3', label: 'RTMR3' },
-  { field: 'tcb_svn', label: 'TCB SVN' },
-]
 
 /** Extract evidence object from Veraison EAR submods (ear.veraison.annotated-evidence). */
 function getAnnotatedEvidenceFromSubmods(
@@ -187,14 +203,26 @@ function getAnnotatedEvidenceFromSubmods(
   return null
 }
 
-/** Extract report_data from attestation result JWT payload (for handshake). Supports both TDX and sample EAR. */
-function getReportDataFromAttestationPayload(
-  payload: Record<string, unknown> | null | undefined
-): string {
-  if (!payload) return ''
-  const evidence = getAnnotatedEvidenceFromSubmods(payload)
-  if (!evidence || typeof evidence.report_data !== 'string') return ''
-  return evidence.report_data
+function parseHandshakeResponse(payload: unknown): HandshakeAttestationResponse {
+  if (!payload || typeof payload !== 'object') {
+    throw new Error('Handshake response payload missing')
+  }
+
+  const response = payload as HandshakeAttestationResponse
+  if (!response.attestation || typeof response.attestation !== 'object') {
+    throw new Error('Handshake attestation missing')
+  }
+  if (!response.attestation.cpu || typeof response.attestation.cpu !== 'object') {
+    throw new Error('Handshake CPU attestation missing')
+  }
+  if (!response.binding?.handshake_verifying_key) {
+    throw new Error('Handshake binding material missing')
+  }
+  if (!response.session?.id) {
+    throw new Error('Handshake session missing')
+  }
+
+  return response
 }
 
 /** Get nested value from object by path (e.g. "tdx.quote.body.mr_seam"). */
@@ -285,9 +313,7 @@ export function getAttestationDisplayRows(
     if (result.payload?.exp != null) {
       const expVal = result.payload.exp
       const expStr =
-        typeof expVal === 'number'
-          ? new Date(expVal * 1000).toISOString()
-          : String(expVal)
+        typeof expVal === 'number' ? new Date(expVal * 1000).toISOString() : String(expVal)
       rows.push({ key: 'Token Expiration', value: expStr })
     }
     if (tdx?.platform_provider_id != null) {
@@ -367,6 +393,19 @@ export class PvcApiClient {
   private ohttpRelayUrl: string | null = null
   private targetServerUrl: string | null = null
   private attestationResult: AttestationVerificationResult | null = null
+  /**
+   * Cached so the session recovery path (driven by `chat` on
+   * `SessionRejectedError`) can re-run handshake + optional trustee
+   * verification with the same configuration the original `init` used.
+   */
+  private attestationServiceConfig: AttestationServiceConfig | null = null
+  /**
+   * Coalesces concurrent recovery attempts. If two `chat` calls run in
+   * parallel and both observe `InvalidSessionId`, the second one awaits
+   * the first one's handshake instead of issuing a redundant
+   * `/v1/handshake` + `/v1/establish` pair.
+   */
+  private recoveryInFlight: Promise<void> | null = null
 
   constructor() {}
 
@@ -390,6 +429,7 @@ export class PvcApiClient {
     this.ohttpGatewayUrl = ohttpGatewayUrl
     this.ohttpRelayUrl = ohttpRelayUrl
     this.targetServerUrl = targetServerUrl
+    this.attestationServiceConfig = attestationService ?? null
     if (identityToken) {
       this.identityAuthToken = identityToken
     }
@@ -403,6 +443,21 @@ export class PvcApiClient {
 
     this.wasmClient = await WasmClient.create(configs)
 
+    await this.performSessionHandshake()
+  }
+
+  /**
+   * Performs `POST /v1/handshake` + optional trustee verification + Noise
+   * `POST /v1/establish`. Extracted from `init` so that
+   * [`recoverSession`] can re-run the same flow after the backend evicts
+   * our `sid`. Assumes `wasmClient` is already created — i.e. that
+   * `init` (which fetches OHTTP configs) has already been called once.
+   */
+  private async performSessionHandshake() {
+    if (!this.wasmClient) {
+      throw new Error('WasmClient not initialized; call init() first')
+    }
+
     await this.prepareIdentityToken()
     const headers: Record<string, string> = {
       'Content-Type': 'application/octet-stream',
@@ -414,35 +469,30 @@ export class PvcApiClient {
     const respText = new TextDecoder().decode(respBody)
 
     try {
-      const json = JSON.parse(respText) as Record<string, unknown>
-      // Backend may return { data: { sid, tee_type, evidence } } or top-level { sid, tee_type, evidence } (e.g. pvc-tee-llm AttestationResponse)
-      const data = (json?.data != null && typeof json.data === 'object' ? json.data : json) as {
-        sid?: string
-        tee_type?: string
-        evidence?: unknown & { report_data?: string }
+      const json = JSON.parse(respText) as ApiResponse<HandshakeAttestationResponse>
+      if (typeof json.code === 'number' && json.code !== 0) {
+        throw new Error(
+          `Handshake attestation failed with code ${json.code}: ${json.message ?? ''}`
+        )
       }
+
+      const data = parseHandshakeResponse(json.data)
       console.debug('[PVC] handshake response data:', data)
 
-      let reportData = ''
+      this.sessionId = data.session.id
 
-      if (data?.sid) {
-        this.sessionId = data.sid
-      }
-
-      // If trustee attestation service is configured, verify evidence first; report_data then comes from attestation result JWT
-      if (attestationService?.attestationServiceUrl && data?.evidence != null) {
-        const tee =
-          attestationService.teeType ?? (typeof data?.tee_type === 'string' ? data.tee_type : 'tdx')
+      const attestationService = this.attestationServiceConfig
+      if (attestationService?.attestationServiceUrl) {
+        const tee = attestationService.teeType ?? data.attestation.cpu.tee_type
         const policyIds = attestationService.policyIds ?? []
-        // For TDX, attestation verification service expects field name "TdQuote" instead of "quote"
-        let evidenceForVerify: unknown = data.evidence
+        let evidenceForVerify: unknown = data.attestation.cpu.evidence
         if (
           tee === 'tdx' &&
-          data.evidence &&
-          typeof data.evidence === 'object' &&
-          'quote' in data.evidence
+          evidenceForVerify &&
+          typeof evidenceForVerify === 'object' &&
+          'quote' in evidenceForVerify
         ) {
-          const raw = data.evidence as Record<string, unknown>
+          const raw = evidenceForVerify as Record<string, unknown>
           evidenceForVerify = Object.fromEntries(
             Object.entries(raw).map(([k, v]) => (k === 'quote' ? ['TdQuote', v] : [k, v]))
           )
@@ -453,28 +503,38 @@ export class PvcApiClient {
           evidenceForVerify,
           policyIds
         )
-        reportData = getReportDataFromAttestationPayload(this.attestationResult?.payload ?? null)
-      } else if (
-        data?.evidence &&
-        typeof data.evidence === 'object' &&
-        (data.evidence as Record<string, unknown>).report_data
-      ) {
-        reportData = (data.evidence as Record<string, unknown>).report_data as string
       }
 
-      // Start Noise Handshake using the report data (public key)
-      if (reportData) {
-        await this.handshake(reportData)
-      } else {
-        const errMsg =
-          'No report data found in attestation response. Cannot proceed with handshake.'
-        console.warn('[PVC]', errMsg)
-        throw new Error(errMsg)
-      }
+      await this.handshake(data.binding.handshake_verifying_key)
     } catch (e) {
       console.error('[PVC] Failed to parse attestation response or perform handshake:', e)
       throw e
     }
+  }
+
+  /**
+   * Drops the cached session state and re-runs the handshake. Mirrors
+   * the Rust side's `PvcClient::recover_session`. Concurrent callers are
+   * coalesced through `recoveryInFlight` so only one handshake runs at a
+   * time — important because two chat requests in flight can both
+   * observe `InvalidSessionId` after a pod restart.
+   */
+  private async recoverSession(): Promise<void> {
+    if (this.recoveryInFlight) {
+      return this.recoveryInFlight
+    }
+    const task = (async () => {
+      try {
+        this.sessionId = null
+        this.noiseSession = null
+        this.noiseHandshakeState = null
+        await this.performSessionHandshake()
+      } finally {
+        this.recoveryInFlight = null
+      }
+    })()
+    this.recoveryInFlight = task
+    return task
   }
 
   // Helper to perform OHTTP POST using WasmClient
@@ -578,7 +638,7 @@ export class PvcApiClient {
     this.identitySignature = token
   }
 
-  async handshake(reportData: string) {
+  async handshake(handshakeVerifyingKey: string) {
     if (!this.wasmClient) throw new Error('WasmClient not initialized')
     if (this.noiseSession) return
     if (!this.identitySignature || !this.identityMessage) {
@@ -627,14 +687,11 @@ export class PvcApiClient {
         throw new Error('Handshake payload missing')
       }
 
-      // 6. Verify Signature
-      // `verify_noise_script_signature(verifying_key, &ephemeral, &resp.data, &resp.signature)?;`
-      // `verifying_key` comes from `attest` report data.
-      // We need to decode `reportData` (base64) -> verifying_key (64 bytes).
-
-      const verifyingKey = decodeReportData(reportData)
-      // Verify signature: verify(vk, client_ephemeral || server_ephemeral, signature)
-      // We need to use `verify_noise_signature` from WASM.
+      // 6. Verify Signature using the canonical binding material returned by /v1/handshake.
+      const verifyingKey = decodeBase64(handshakeVerifyingKey)
+      if (verifyingKey.length !== 64) {
+        throw new Error('Invalid handshake verifying key length')
+      }
 
       const isValid = this.wasmClient.verifyNoiseSignature(
         verifyingKey,
@@ -654,13 +711,49 @@ export class PvcApiClient {
     }
   }
 
+  /**
+   * Sends a chat completion request, transparently re-handshaking and
+   * retrying ONCE if the backend rejects our `sid`.
+   *
+   * Mirrors `PvcClient::chat_completions` on the Rust side. The single
+   * retry is structurally bounded — there is no loop and no recursion —
+   * so a chronic mismatch fails fast instead of hammering the backend.
+   * Non-`SessionRejectedError` failures (network, decryption, …) are
+   * propagated verbatim without touching the session.
+   */
   async chat(
     message: string,
     history: any[] = [],
     model: string = 'Qwen/Qwen3-VL-4B-Thinking',
     onToken?: (token: string) => void,
     options?: { enableThinking?: boolean; onReasoning?: (token: string) => void }
-  ) {
+  ): Promise<string> {
+    try {
+      return await this.chatOnce(message, history, model, onToken, options)
+    } catch (e) {
+      if (!isSessionRejected(e)) {
+        throw e
+      }
+      console.warn('[PVC] session rejected by tee-llm, re-handshaking and retrying once', e)
+      await this.recoverSession()
+      console.info('[PVC] session re-established, retrying chat completions')
+      return this.chatOnce(message, history, model, onToken, options)
+    }
+  }
+
+  /**
+   * Single attempt of the chat request. Throws `SessionRejectedError`
+   * when the body comes back as an InvalidSessionId envelope instead of
+   * a Noise frame stream — that error is the only signal `chat` uses to
+   * trigger session recovery.
+   */
+  private async chatOnce(
+    message: string,
+    history: any[],
+    model: string,
+    onToken?: (token: string) => void,
+    options?: { enableThinking?: boolean; onReasoning?: (token: string) => void }
+  ): Promise<string> {
     if (!this.noiseSession) throw new Error('Secure channel not established')
 
     const messages = [...history, { role: 'user', content: message }]
@@ -753,9 +846,51 @@ export class PvcApiClient {
     let buffer = new Uint8Array(0)
     let combinedResponse = ''
     let totalReadBytes = 0
+    /**
+     * `true` once we have observed a leading `{` and committed to
+     * interpreting the entire response as a JSON `ApiResponse` envelope.
+     * Set on the first chunk so we never enter the frame loop in this
+     * call — the envelope is always small (under a few KB) so we just
+     * accumulate it and decode at end-of-stream.
+     */
+    let envelopeMode = false
 
     // Max reasonable frame payload (10MB); larger suggests first 4 bytes are not our length header (e.g. HTML/text)
     const MAX_FRAME_PAYLOAD = 10 * 1024 * 1024
+    // A JSON `ApiResponse` envelope is at most a few hundred bytes; cap
+    // buffering to keep an attacker who manages to inject a large
+    // `{...` from forcing us to hoard the entire stream.
+    const MAX_ENVELOPE_BYTES = 64 * 1024
+
+    /**
+     * If the buffered response is a JSON `ApiResponse` envelope, throw a
+     * typed error (so `chat`'s wrapper can react to `InvalidSessionId`)
+     * or a generic `Error` for any other non-success code. Returns
+     * `false` when the body is not a parseable envelope, so the caller
+     * can fall back to its normal "looks like text/HTML" reporting.
+     */
+    const throwIfErrorEnvelope = (bytes: Uint8Array): void => {
+      let text: string
+      try {
+        text = new TextDecoder().decode(bytes)
+      } catch {
+        return
+      }
+      let envelope: ApiResponse<unknown>
+      try {
+        envelope = JSON.parse(text) as ApiResponse<unknown>
+      } catch {
+        return
+      }
+      if (typeof envelope.code !== 'number' || envelope.code === 0) {
+        return
+      }
+      const message = envelope.message ?? `backend error ${envelope.code}`
+      if (envelope.code === INVALID_SESSION_ID_CODE) {
+        throw new SessionRejectedError(message, envelope.code)
+      }
+      throw new Error(`Backend error code=${envelope.code}: ${message}`)
+    }
 
     // Process complete frames in buffer (4-byte big-endian length + payload)
     const processBufferFrames = (): void => {
@@ -826,16 +961,24 @@ export class PvcApiClient {
     while (true) {
       const { done, value } = await reader.read()
       if (done) {
+        if (envelopeMode) {
+          // Whole response body was a JSON envelope (e.g. an
+          // `InvalidSessionId` rejection from the request guard). Throw
+          // a typed error so `chat` can react. If it doesn't parse, fall
+          // through to the existing "not PVC frame format" diagnostics.
+          throwIfErrorEnvelope(buffer)
+        }
         processBufferFrames()
         if (buffer.length > 0) {
           const view = new DataView(buffer.buffer, buffer.byteOffset, Math.min(4, buffer.length))
           const declaredLen = buffer.length >= 4 ? view.getUint32(0, false) : 0
           const wantLen = 4 + declaredLen
-          const firstBytesHex =
-            Array.from(buffer.slice(0, Math.min(16, buffer.length)))
-              .map((b) => b.toString(16).padStart(2, '0'))
-              .join(' ')
-          const firstChars = new TextDecoder().decode(buffer.slice(0, Math.min(80, buffer.length))).replace(/[\x00-\x1f]/g, '.')
+          const firstBytesHex = Array.from(buffer.slice(0, Math.min(16, buffer.length)))
+            .map((b) => b.toString(16).padStart(2, '0'))
+            .join(' ')
+          const firstChars = new TextDecoder()
+            .decode(buffer.slice(0, Math.min(80, buffer.length)))
+            .replace(/[\x00-\x1f]/g, '.')
           if (declaredLen > MAX_FRAME_PAYLOAD) {
             const fullBodyText = new TextDecoder().decode(buffer)
             console.error(
@@ -844,7 +987,11 @@ export class PvcApiClient {
               firstBytesHex,
               '— likely HTML/error page from relay or wrong decapsulation.'
             )
-            console.error('[PVC] Full response body (decoded as text), length:', buffer.length, 'chars:')
+            console.error(
+              '[PVC] Full response body (decoded as text), length:',
+              buffer.length,
+              'chars:'
+            )
             console.error(fullBodyText)
             throw new Error(
               `OHTTP response body is not PVC frame format (looks like text/HTML). First bytes: ${firstChars.slice(0, 60)}… Full body logged above.`
@@ -859,7 +1006,12 @@ export class PvcApiClient {
             combinedResponse.length
           )
         } else {
-          console.debug('[PVC] Stream ended. totalReadBytes:', totalReadBytes, 'combinedResponse length:', combinedResponse.length)
+          console.debug(
+            '[PVC] Stream ended. totalReadBytes:',
+            totalReadBytes,
+            'combinedResponse length:',
+            combinedResponse.length
+          )
         }
         break
       }
@@ -871,6 +1023,32 @@ export class PvcApiClient {
       newBuffer.set(buffer)
       newBuffer.set(value, buffer.length)
       buffer = newBuffer
+
+      // First-byte sniff: a Noise frame begins with a 4-byte big-endian
+      // length whose top byte is `0x00` for any < 16 MiB payload, while
+      // an `ApiResponse` envelope always begins with `{` (`0x7B`). If
+      // we're already in envelope mode, keep buffering; otherwise sniff
+      // the very first byte once.
+      if (!envelopeMode && buffer.length >= 1 && buffer[0] === 0x7b /* '{' */) {
+        envelopeMode = true
+      }
+
+      if (envelopeMode) {
+        // Try to parse early so we can fail fast — small envelopes
+        // typically fit in the first chunk. `throwIfErrorEnvelope` only
+        // throws when the buffer is a complete, non-success envelope;
+        // otherwise it returns and we keep buffering until end-of-stream.
+        throwIfErrorEnvelope(buffer)
+        if (buffer.length > MAX_ENVELOPE_BYTES) {
+          // Either a malformed envelope or someone is trying to flood us
+          // with `{...`. Treat it as a generic transport error rather
+          // than burning unbounded memory.
+          throw new Error(
+            `Response body looked like a JSON envelope but exceeded ${MAX_ENVELOPE_BYTES} bytes without parsing`
+          )
+        }
+        continue
+      }
 
       processBufferFrames()
     }

@@ -13,6 +13,7 @@
 // limitations under the License.
 
 mod commands {
+    pub mod attest;
     pub mod chat;
     pub mod login;
     pub mod session;
@@ -25,7 +26,7 @@ mod session;
 
 use anyhow::Result;
 use clap::{Args, Parser, Subcommand};
-use commands::{chat, login, session as session_commands, upload};
+use commands::{attest, chat, login, session as session_commands, upload};
 use config::ProfileOverrides;
 use output::OutputMode;
 
@@ -40,6 +41,7 @@ struct Cli {
 #[derive(Debug, Subcommand)]
 enum Commands {
     Login(LoginArgs),
+    Attest(AttestArgs),
     Chat(ChatArgs),
     Upload(UploadArgs),
     Session(SessionArgs),
@@ -63,6 +65,22 @@ struct LoginArgs {
     token_stdin: bool,
     #[arg(long, default_value_t = false)]
     interactive: bool,
+}
+
+#[derive(Debug, Args)]
+struct AttestArgs {
+    #[arg(long)]
+    identity_server_url: Option<String>,
+    #[arg(long)]
+    gateway_url: Option<String>,
+    #[arg(long)]
+    relay_url: Option<String>,
+    #[arg(long)]
+    target_url: Option<String>,
+    #[arg(long)]
+    nonce: Option<String>,
+    #[arg(long, default_value = "human")]
+    output: String,
 }
 
 #[derive(Debug, Args)]
@@ -116,6 +134,20 @@ async fn main() -> Result<()> {
                 token_env_var: args.token_env_var,
                 token_stdin: args.token_stdin,
                 interactive: args.interactive,
+            })
+            .await
+        }
+        Commands::Attest(args) => {
+            let output = OutputMode::parse(&args.output)?;
+            attest::run(attest::AttestCommand {
+                overrides: ProfileOverrides {
+                    identity_server_url: args.identity_server_url,
+                    gateway_url: args.gateway_url,
+                    relay_url: args.relay_url,
+                    target_url: args.target_url,
+                },
+                nonce: args.nonce,
+                output,
             })
             .await
         }

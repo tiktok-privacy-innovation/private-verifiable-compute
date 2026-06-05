@@ -42,7 +42,7 @@ spec:
           imagePullPolicy: "IfNotPresent"
           env:
           - name: LD_LIBRARY_PATH
-            value: ${LD_LIBRARY_PATH}:/usr/local/nvidia/lib64
+            value: /usr/local/nvidia/lib64:/usr/lib/x86_64-linux-gnu
           - name: LLM_MODEL
             value: {{ .Values.teeLlm.llmModel }}
           - name: LLM_PORT

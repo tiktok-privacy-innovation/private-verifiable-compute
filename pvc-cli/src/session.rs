@@ -15,12 +15,13 @@
 use crate::config::CliProfile;
 use anyhow::{Result, anyhow};
 use pvc_client_core::{
-    PvcClient, create_or_get_encryption_key, pvc_home_dir, read_json_file, remove_file_if_exists,
-    write_private_json_file,
+    IdTokenProvider, PvcClient, StaticIdToken, create_or_get_encryption_key, pvc_home_dir,
+    read_json_file, remove_file_if_exists, write_private_json_file,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use std::path::PathBuf;
+use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -87,6 +88,11 @@ impl StoredSession {
     pub async fn bootstrap_client(&self) -> Result<PvcClient> {
         let auth_token = self.auth_token()?.map(str::to_owned);
         let mut client = PvcClient::from_config(&self.profile.to_client_config()).await?;
+        // Inject the disk-loaded token so the recovery path inside
+        // `chat_completions` (after a tee-llm restart) re-handshakes with
+        // the same credentials this CLI invocation was bootstrapped with,
+        // matching the long-running pvc-client behavior.
+        client.set_id_token_provider(Arc::new(StaticIdToken(auth_token.clone())));
         let key = create_or_get_encryption_key()?;
         client.handshake_with_attestation(auth_token).await?;
         client.upload_encryption_key(&key).await?;

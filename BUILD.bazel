@@ -17,6 +17,15 @@ load("@gazelle//:def.bzl", "gazelle")
 load("@rules_multirun//:defs.bzl", "multirun")
 load("@rules_oci//oci:defs.bzl", "oci_push")
 
+# OCI images use distroless_cc pinned for linux/amd64 (see MODULE.bazel oci.pull).
+platform(
+    name = "oci_linux_amd64",
+    constraint_values = [
+        "@platforms//os:linux",
+        "@platforms//cpu:x86_64",
+    ],
+)
+
 gazelle(name = "gazelle")
 
 REPOS = {
@@ -59,6 +68,14 @@ multirun(
     name = "load_all_images",
     commands = [
         "//{}:load_image".format(k)
+        for k in REPOS.keys()
+    ],
+)
+
+filegroup(
+    name = "all_image_tarballs",
+    srcs = [
+        "//{}:image_tarball".format(k)
         for k in REPOS.keys()
     ],
 )

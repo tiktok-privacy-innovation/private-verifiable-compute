@@ -26,8 +26,6 @@ cp env.example .env
 - `region` A specific geographical location where you can host your resources, e.g., `us-east5`.
 - `zone` A deployment area within a region, e.g., `us-east5-a`.
 
-Configure the `pccs_url` value in the `pvc-client/sgx_default_qcnl.conf` to a aviable Intel PCCS server address. 
-
 ## Create Resources
 
 The resources are created and managed by the project administrator who has the
@@ -41,10 +39,8 @@ and service accounts.
 > These resource are global and only created once by admin. For the developers
 > in the project, you can start with the next step.
 
-```
-pushd resources/global
-terraform apply
-popd
+```shell
+./resources/global/apply.sh
 ```
 
 `resources/deployment` directory includes the resources releated to kunernates
@@ -52,10 +48,8 @@ including: kubernetes namespace, role. These resources are created under
 different namespace. So the namespace parameter is required, and you can create
 different deployments under different namespaces.
 
-```shell 
-pushd resources/deployment
-./apply.sh --namespace=<namespace-to-deploy>
-popd
+```shell
+./resources/deployment/apply.sh --namespace=<namespace-to-deploy>
 ```
 
 ## Pushing Images

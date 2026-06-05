@@ -20,7 +20,6 @@ mod chat;
 mod chunking;
 mod embedding;
 mod fairing;
-mod gpu_attester;
 mod inference;
 mod noise;
 mod rag;
@@ -33,6 +32,7 @@ mod sqlite_vector_store;
 use fairing::HeaderLogger;
 use p256::ecdsa::SigningKey;
 use rand_core::OsRng;
+use rocket::Request;
 use rocket::fairing::AdHoc;
 use rocket::serde::{Deserialize, Serialize};
 #[cfg(feature = "sqlite")]
@@ -41,7 +41,7 @@ use rusqlite::ffi::{sqlite3, sqlite3_api_routines, sqlite3_auto_extension};
 use sqlite_vec::sqlite3_vec_init;
 use tokio::sync::Mutex;
 use tracing_subscriber::filter::{EnvFilter, LevelFilter};
-use types::{ApiResult, utils::get_env_or_default};
+use types::{ApiCode, ApiResult, utils::get_env_or_default};
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(crate = "rocket::serde")]
@@ -80,6 +80,67 @@ impl ServiceConfig {
 #[get("/health")]
 fn health() -> ApiResult<()> {
     ApiResult::Ok(())
+}
+
+/// Catcher for 400 responses produced by failed request/data guards. The
+/// `Sid` request guard and the `CleartextPayload` data guard both surface
+/// `Status::BadRequest` when the cached session id no longer maps to a live
+/// `Session` (typical after a pod restart). Without a catcher Rocket would
+/// render its default HTML 400 page; the OHTTP gateway then translates the
+/// non-2xx upstream response into a 502 with a generic body, leaving callers
+/// unable to deterministically tell "I should re-handshake".
+///
+/// Returning [`ApiCode::InvalidSessionId`] here renders a 200 OK envelope
+/// (`ApiCode` already implements [`Responder`](rocket::response::Responder)
+/// that way), so the gateway passes the JSON body through and clients can
+/// detect the structured `code = 10003` and trigger a single recovery
+/// handshake + retry.
+#[catch(400)]
+fn invalid_session_catcher(req: &Request<'_>) -> ApiCode {
+    let path = req.uri().path().as_str();
+    if path.ends_with("/attestation") {
+        tracing::warn!(
+            method = %req.method(),
+            path,
+            "returning structured InvalidRequestBody envelope for attestation parse failure"
+        );
+        return ApiCode::InvalidRequestBody;
+    }
+
+    tracing::warn!(
+        method = %req.method(),
+        path,
+        "returning structured InvalidSessionId envelope for 400 (client should re-handshake)"
+    );
+    ApiCode::InvalidSessionId
+}
+
+#[catch(422)]
+fn invalid_request_catcher(req: &Request<'_>) -> ApiCode {
+    let path = req.uri().path().as_str();
+    if path.ends_with("/attestation") {
+        tracing::warn!(
+            method = %req.method(),
+            path,
+            "returning structured InvalidRequestBody envelope for attestation validation failure"
+        );
+        return ApiCode::InvalidRequestBody;
+    }
+
+    ApiCode::InvalidRequestBody
+}
+
+/// Catcher for 401 responses produced by the `IdentityToken` request guard.
+/// Mirrors [`invalid_session_catcher`] in shape so the OHTTP gateway forwards
+/// a structured envelope instead of dropping the body via a 502 translation.
+#[catch(401)]
+fn invalid_identity_token_catcher(req: &Request<'_>) -> ApiCode {
+    tracing::warn!(
+        method = %req.method(),
+        path = %req.uri().path(),
+        "returning structured InvalidIdentityToken envelope for 401"
+    );
+    ApiCode::InvalidIdentityToken
 }
 
 #[cfg(feature = "sqlite")]
@@ -136,6 +197,14 @@ fn rocket() -> _ {
             routes![
                 attestation::handshake_with_attestation,
                 attestation::attestation
+            ],
+        )
+        .register(
+            "/",
+            catchers![
+                invalid_session_catcher,
+                invalid_request_catcher,
+                invalid_identity_token_catcher
             ],
         )
 }

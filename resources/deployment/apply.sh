@@ -16,6 +16,9 @@
 
 set -e
 
+script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+repo_root="$(cd "$script_dir/../.." && pwd)"
+
 for arg in "$@"
 do
     case $arg in
@@ -30,8 +33,8 @@ done
 
 
 if [ -z "$namespace" ]; then
-    echo -e "Error: the namespace parameter is missing, please run the script like ./apply.sh --namespace=xxx"
-    exit
+    echo -e "Error: the namespace parameter is missing, please run the script like ./resources/deployment/apply.sh --namespace=xxx"
+    exit 1
 fi
 
 # Check if gcloud is installed
@@ -47,19 +50,20 @@ if ! gcloud auth list | grep -q 'ACTIVE'; then
 fi
 
 # check whether variables has been set
-VAR_FILE="../../.env"
+VAR_FILE="$repo_root/.env"
 if [ ! -f "$VAR_FILE" ]; then
     echo "Error: Variables file does not exist."
     exit 1
 fi
-VAR_FILE=$(realpath $VAR_FILE)
-source $VAR_FILE
+VAR_FILE=$(realpath "$VAR_FILE")
+source "$VAR_FILE"
 
-zone=$region-a
+cd "$script_dir"
+
 # get kubernete cluster credentials
-gcloud container clusters get-credentials pvc-cluster --zone $zone --project $project_id
+gcloud container clusters get-credentials pvc-cluster --zone "$zone" --project "$project_id"
 
-cp $VAR_FILE terraform.tfvars
+cp "$VAR_FILE" terraform.tfvars
 
 echo -e "\nnamespace=\"$namespace\"" >> terraform.tfvars
 # terraform init -reconfigure -backend-config="bucket=dcr-tf-state-$env"  -backend-config="prefix=$namespace" 

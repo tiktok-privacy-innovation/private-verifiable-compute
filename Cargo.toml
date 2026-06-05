@@ -83,3 +83,6 @@ num_enum = "0.7.5"
 
 [patch."https://github.com/openanolis/csv-rs.git"]
 csv-rs = { git = "https://github.com/privacywill/csv-rs.git", rev = "b67a07e" }
+
+[patch.crates-io]
+nvml-wrapper = { git = "https://github.com/rust-nvml/nvml-wrapper", rev = "7e0752f331" }

@@ -13,9 +13,9 @@
 # limitations under the License.
 
 load("@crates//:defs.bzl", "all_crate_deps")
-load("@rules_oci//oci:defs.bzl", "oci_image", "oci_load")
-load("@rules_pkg//pkg:tar.bzl", "pkg_tar")
+load("@rules_oci//oci:defs.bzl", "oci_load")
 load("@rules_rust//rust:defs.bzl", "rust_binary")
+load("//tools:reproducible_oci.bzl", "reproducible_oci_image", "reproducible_pkg_tar")
 
 package(default_visibility = ["//visibility:public"])
 
@@ -42,7 +42,7 @@ rust_binary(
     ],
 )
 
-pkg_tar(
+reproducible_pkg_tar(
     name = "tar",
     srcs = [
         ":identity-server",
@@ -50,9 +50,9 @@ pkg_tar(
     ],
 )
 
-oci_image(
+reproducible_oci_image(
     name = "image",
-    base = "@distroless_cc",
+    base = "@distroless_cc_linux_amd64",
     entrypoint = ["/identity-server"],
     env = {
         "ROCKET_CONFIG": "/Rocket.toml",
@@ -69,5 +69,12 @@ oci_load(
     name = "load_image",
     image = ":image",
     repo_tags = ["pvc-identity-server:latest"],
+    visibility = ["//visibility:public"],
+)
+
+filegroup(
+    name = "image_tarball",
+    srcs = [":load_image"],
+    output_group = "tarball",
     visibility = ["//visibility:public"],
 )

@@ -1,0 +1,15 @@
+{
+  "name": "pvc-docs",
+  "private": true,
+  "version": "0.0.0",
+  "description": "VitePress site for the Private Verifiable Compute project documentation.",
+  "type": "module",
+  "scripts": {
+    "docs:dev": "vitepress dev . --host",
+    "docs:build": "vitepress build .",
+    "docs:preview": "vitepress preview ."
+  },
+  "devDependencies": {
+    "vitepress": "^1.6.3"
+  }
+}

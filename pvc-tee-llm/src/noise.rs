@@ -24,7 +24,8 @@ use rocket::State;
 use rocket::fairing::AdHoc;
 use std::sync::Arc;
 use tokio::sync::{Mutex, RwLock};
-use tracing::{error, info};
+use tokio::time::{Duration, sleep};
+use tracing::{error, info, warn};
 use types::ApiResponse;
 use types::keys::PublicKeyFields;
 use types::{ApiCode, ApiResult, HandShakeResp, keys::ContextKey};
@@ -100,6 +101,8 @@ pub fn sign_noise_script(signing_key: &mut SigningKey, e: &[u8], ee: &[u8]) -> V
 
 /// Interval in seconds between identity server pubkey refreshes.
 const PUBKEY_REFRESH_INTERVAL_SECS: u64 = 300;
+const PUBKEY_FETCH_RETRY_ATTEMPTS: usize = 10;
+const PUBKEY_FETCH_RETRY_DELAY_SECS: u64 = 2;
 
 async fn fetch_identity_pubkey(url: &str) -> Result<RsaPublicKey, String> {
     let client = reqwest::Client::new();
@@ -129,12 +132,33 @@ async fn fetch_identity_pubkey(url: &str) -> Result<RsaPublicKey, String> {
     RsaPublicKey::new(n, e).map_err(|e| format!("invalid RSA pubkey components: {}", e))
 }
 
+async fn fetch_identity_pubkey_with_retry(url: &str) -> Result<RsaPublicKey, String> {
+    for attempt in 1..=PUBKEY_FETCH_RETRY_ATTEMPTS {
+        match fetch_identity_pubkey(url).await {
+            Ok(pubkey) => return Ok(pubkey),
+            Err(error) if attempt < PUBKEY_FETCH_RETRY_ATTEMPTS => {
+                warn!(
+                    attempt,
+                    error = %error,
+                    "failed to fetch identity server pubkey during startup; retrying"
+                );
+                sleep(Duration::from_secs(PUBKEY_FETCH_RETRY_DELAY_SECS)).await;
+            }
+            Err(error) => return Err(error),
+        }
+    }
+
+    unreachable!()
+}
+
 pub fn stage(identity_server_url: String) -> AdHoc {
     AdHoc::on_ignite("Fetch identity server RSA pubkey", |rocket| async move {
         let url = format!("{}/pubkey", identity_server_url.trim_end_matches('/'));
-        let rsa_public_key = fetch_identity_pubkey(&url)
+        let rsa_public_key = fetch_identity_pubkey_with_retry(&url)
             .await
-            .expect("failed to fetch identity server pubkey at startup");
+            .unwrap_or_else(|error| {
+                panic!("failed to fetch identity server pubkey after retries: {error}")
+            });
         let id_pubkey: IdPubkey = Arc::new(RwLock::new(rsa_public_key));
         let id_pubkey_clone = Arc::clone(&id_pubkey);
 

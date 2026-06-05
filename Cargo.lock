@@ -318,7 +318,7 @@ checksum = "1505bd5d3d116872e7271a6d4e16d81d0c8570876c8de68093a09ac269d8aac0"
 [[package]]
 name = "attester"
 version = "0.1.0"
-source = "git+https://github.com/confidential-containers/guest-components#ced6312e8f9d0f23a3fbb1a7453b55a7870d8e5c"
+source = "git+https://github.com/confidential-containers/guest-components?rev=dea0fa37f35d05d10af1bf4e7a6ae6ccb2a7d982#dea0fa37f35d05d10af1bf4e7a6ae6ccb2a7d982"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -337,8 +337,7 @@ dependencies = [
  "kbs-types",
  "log",
  "num-traits",
- "nvml-wrapper 0.11.0 (git+https://github.com/rust-nvml/nvml-wrapper?rev=7e0752f331)",
- "occlum_dcap",
+ "nvml-wrapper",
  "picky-asn1 0.10.1",
  "picky-asn1-der 0.5.4",
  "picky-asn1-x509 0.15.2",
@@ -666,7 +665,7 @@ dependencies = [
  "bitflags 2.10.0",
  "cexpr",
  "clang-sys",
- "itertools 0.13.0",
+ "itertools",
  "log",
  "prettyplease",
  "proc-macro2",
@@ -1262,7 +1261,7 @@ checksum = "460fbee9c2c2f33933d720630a6a0bac33ba7053db5344fac858d4b8952d77d5"
 [[package]]
 name = "crypto"
 version = "0.1.0"
-source = "git+https://github.com/confidential-containers/guest-components#ced6312e8f9d0f23a3fbb1a7453b55a7870d8e5c"
+source = "git+https://github.com/confidential-containers/guest-components?rev=dea0fa37f35d05d10af1bf4e7a6ae6ccb2a7d982#dea0fa37f35d05d10af1bf4e7a6ae6ccb2a7d982"
 dependencies = [
  "aes-gcm",
  "aes-kw",
@@ -3000,15 +2999,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "itertools"
-version = "0.13.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "413ee7dfc52ee1a4949ceeb7dbc8a33f2d6c088194d9f922fb8318faf1f01186"
-dependencies = [
- "either",
-]
-
-[[package]]
 name = "itoa"
 version = "1.0.15"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3624,41 +3614,16 @@ dependencies = [
 [[package]]
 name = "nvml-wrapper"
 version = "0.11.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "0d5c6c0ef9702176a570f06ad94f3198bc29c524c8b498f1b9346e1b1bdcbb3a"
-dependencies = [
- "bitflags 2.10.0",
- "libloading",
- "nvml-wrapper-sys 0.9.0 (registry+https://github.com/rust-lang/crates.io-index)",
- "serde",
- "serde_derive",
- "static_assertions",
- "thiserror 1.0.69",
- "wrapcenum-derive",
-]
-
-[[package]]
-name = "nvml-wrapper"
-version = "0.11.0"
 source = "git+https://github.com/rust-nvml/nvml-wrapper?rev=7e0752f331#7e0752f331d37a62a46ef2fb6329a33fae36dd8d"
 dependencies = [
  "bitflags 2.10.0",
  "libloading",
- "nvml-wrapper-sys 0.9.0 (git+https://github.com/rust-nvml/nvml-wrapper?rev=7e0752f331)",
+ "nvml-wrapper-sys",
  "serde",
  "serde_derive",
  "static_assertions",
  "thiserror 1.0.69",
  "wrapcenum-derive",
-]
-
-[[package]]
-name = "nvml-wrapper-sys"
-version = "0.9.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "dd23dbe2eb8d8335d2bce0299e0a07d6a63c089243d626ca75b770a962ff49e6"
-dependencies = [
- "libloading",
 ]
 
 [[package]]
@@ -3708,16 +3673,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "ff76201f031d8863c38aa7f905eca4f53abbfa15f609db4277d44cd8938f33fe"
 dependencies = [
  "memchr",
-]
-
-[[package]]
-name = "occlum_dcap"
-version = "0.1.0"
-source = "git+https://github.com/occlum/occlum?tag=v0.29.7#b5a32a8d8a81de2458c2b0d06b07ddce6fd10a44"
-dependencies = [
- "cfg-if",
- "libc",
- "sgx_types",
 ]
 
 [[package]]
@@ -3879,7 +3834,7 @@ dependencies = [
  "ed25519-dalek",
  "hmac",
  "http 1.4.0",
- "itertools 0.10.5",
+ "itertools",
  "log",
  "oauth2",
  "p256",
@@ -4567,6 +4522,7 @@ dependencies = [
  "futures-util",
  "hex",
  "identity",
+ "kbs-types",
  "noise",
  "num-bigint-dig",
  "ohttp_wrap",
@@ -4651,7 +4607,7 @@ dependencies = [
  "lru",
  "noise",
  "num-bigint-dig",
- "nvml-wrapper 0.11.0 (registry+https://github.com/rust-lang/crates.io-index)",
+ "nvml-wrapper",
  "openai-api-rs",
  "p256",
  "rand 0.8.5",
@@ -5811,11 +5767,6 @@ dependencies = [
  "static_assertions",
  "uuid",
 ]
-
-[[package]]
-name = "sgx_types"
-version = "1.1.5"
-source = "git+https://github.com/occlum/occlum?tag=v0.29.7#b5a32a8d8a81de2458c2b0d06b07ddce6fd10a44"
 
 [[package]]
 name = "sha1"
@@ -7014,7 +6965,7 @@ dependencies = [
  "jsonwebkey 0.4.0",
  "jsonwebtoken 10.2.0",
  "kbs-types",
- "nvml-wrapper 0.11.0 (registry+https://github.com/rust-lang/crates.io-index)",
+ "nvml-wrapper",
  "openssl",
  "reqwest 0.12.24",
  "reqwest-middleware",

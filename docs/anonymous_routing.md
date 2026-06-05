@@ -41,9 +41,11 @@ In summary, the system uses the anonymous token as a lightweight session identif
 
 ### Establish secure channel between the client and PVC compute node (Step 6 - 7)
 
-After the gateway selects a PVC compute node, it returns the node’s attestation evidence to the client. The client verifies this evidence to ensure that the compute node is running trusted and untampered code within a verified TEE environment.
+After the gateway selects a PVC compute node, the client calls the compute node attestation endpoints through the established anonymous route. `/v1/attestation` returns a normalized attestation envelope for explicit nonce-based checks, while `/v1/handshake` returns the same envelope together with `binding.handshake_verifying_key` and `session.id` for secure-session bootstrap.
 
-Once attestation succeeds, PVC establishes an end-to-end encrypted channel between the client and the compute node using the Noise framework. This secure channel guarantees confidentiality, integrity, and forward secrecy for all subsequent communication, ensuring that even intermediaries such as the gateway or relay cannot access session contents. Refer to [this document](./noise.md) for more details about the integration of attestation verification and the noise framework.
+The client verifies `attestation.cpu` and any returned `attestation.devices` to ensure that the compute node is running trusted and untampered code within a verified TEE environment. It then treats `binding.handshake_verifying_key` as the responder identity that must match the Noise transcript signature before the secure channel is accepted.
+
+Once attestation and binding verification succeed, PVC establishes an end-to-end encrypted channel between the client and the compute node using the Noise framework. This secure channel guarantees confidentiality, integrity, and forward secrecy for all subsequent communication, ensuring that even intermediaries such as the gateway or relay cannot access session contents. Refer to [this document](./noise.md) for more details about the integration of attestation verification and the Noise framework.
 
 
 ### Secure computation and response

@@ -1,3 +1,7 @@
 pvc-client/frontend/node_modules
 # Ignore the bazel build cache folder for building inside a container.
 .pvc-bazel-cache
+# VitePress documentation site dependencies and outputs.
+docs/node_modules
+docs/.vitepress/cache
+docs/.vitepress/dist

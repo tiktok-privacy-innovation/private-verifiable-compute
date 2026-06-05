@@ -70,7 +70,17 @@ spec:
           - name: LLM_MAX_TOKEN
             value: {{ .Values.teeLlm.llmMaxToken | quote }}
           - name: LD_LIBRARY_PATH
-            value: ${LD_LIBRARY_PATH}:/usr/local/nvidia/lib64
+            value: /usr/local/nvidia/lib64:/usr/lib/x86_64-linux-gnu
+          {{- if .Values.teeLlm.sampleAttestation }}
+          # Opt into the upstream `Tee::SampleDevice` attester fallback so
+          # environments without a real CC-enabled GPU (e.g. minikube) still
+          # populate the `devices` evidence list. The matching CPU side
+          # (`Tee::Sample`) is auto-detected by the attester crate when no TDX
+          # is present, so no additional flag is needed there. MUST stay
+          # false / unset on real-hardware overlays.
+          - name: ENABLE_SAMPLE_DEVICE
+            value: "1"
+          {{- end }}
           ports:
             - name: http
               containerPort: {{ .Values.teeLlm.service.port }}

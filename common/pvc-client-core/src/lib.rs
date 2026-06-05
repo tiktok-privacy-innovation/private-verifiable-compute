@@ -22,6 +22,8 @@ use futures::TryStreamExt;
 use futures::stream::Stream;
 use futures::stream::StreamExt;
 use identity::IdentityClient;
+#[cfg(feature = "attestation")]
+use kbs_types::Tee;
 use noise::{NoiseNnInitiator, NoiseNnTransport};
 use ohttp_wrap::{ClientRequest, KeyConfig, Message, Mode, OhttpClient};
 use p256::ecdsa::{Signature, signature::Verifier};
@@ -39,11 +41,10 @@ use std::sync::Arc;
 use tokio::sync::Mutex;
 use tokio_util::codec::LengthDelimitedCodec;
 use tokio_util::io::StreamReader;
-use tracing::error;
-#[cfg(feature = "attestation")]
-use tracing::info;
+use tracing::{error, info, warn};
 use types::{
-    ApiError, ApiResponse, AttestationResponse, HandShakeResp, ReportData, UploadDocumentReq,
+    ApiCode, ApiError, ApiResponse, AttestationResponse, HandShakeResp, ReportData,
+    UploadDocumentReq,
     async_rw::{self},
     http::{
         HttpClient,
@@ -59,9 +60,15 @@ use types::{
 };
 
 #[cfg(feature = "attestation")]
-use verifier::{InitDataHash, ReportData as TeeReportData, to_verifier};
+use verifier::{InitDataHash, ReportData as TeeReportData, VerifierConfig, to_verifier};
 
 use futures::{AsyncReadExt, AsyncWriteExt};
+
+struct VerifiedHandshake {
+    handshake_verifying_key: [u8; 64],
+    session_id: Option<String>,
+    claims: Claim,
+}
 
 const ESTABLISH_PATH: &str = "/v1/establish";
 const CHAT_COMPLETIONS_PATH: &str = "/v1/chat/completions";
@@ -77,6 +84,13 @@ const IDENTITY_TOKEN_HEADER: &str = "X-Identity-Token";
 const IDENTITY_MESSAGE_HEADER: &str = "X-Identity-Message";
 const PVC_ROOT_DIR: &str = ".pvc";
 const KEY_FILE: &str = "secret";
+#[cfg(feature = "attestation")]
+const NVIDIA_REMOTE_VERIFIER_CONFIG: &str = r#"{
+    "nvidia_verifier": {
+        "type": "Remote",
+        "verifier_url": "https://nras.attestation.nvidia.com/v4/attest"
+    }
+}"#;
 
 pub type Claim = Vec<(Value, String)>;
 pub type ChatCompletionStream = Pin<Box<dyn Stream<Item = Result<String>> + Send>>;
@@ -89,6 +103,44 @@ pub struct PvcClientConfig {
     pub target_url: String,
 }
 
+/// Source of the identity token used for the next handshake.
+///
+/// Implementations are consulted lazily by [`PvcClient::recover_session`]
+/// each time the backend forgets our `sid` (e.g. after a pvc-tee-server
+/// restart). Returning `None` is equivalent to the OAuth-disabled path —
+/// the handshake will run unauthenticated.
+///
+/// We use a trait instead of caching the token in [`PvcClient`] so the
+/// recovery path can pick up a freshly logged-in token when the operator
+/// re-authenticates without having to call back into [`PvcClient`].
+#[async_trait]
+pub trait IdTokenProvider: Send + Sync {
+    async fn id_token(&self) -> Option<String>;
+}
+
+/// Adapter so callers that already keep the live token in a Rocket-style
+/// `Arc<RwLock<Option<String>>>` can pass it straight through to
+/// [`PvcClient::set_id_token_provider`] without an extra wrapper.
+#[async_trait]
+impl IdTokenProvider for tokio::sync::RwLock<Option<String>> {
+    async fn id_token(&self) -> Option<String> {
+        self.read().await.clone()
+    }
+}
+
+/// Convenience provider for callers that load the token once at startup
+/// and never refresh it (e.g. `pvc-cli`, where each invocation reloads
+/// the value from `session.json`).
+#[derive(Debug, Clone, Default)]
+pub struct StaticIdToken(pub Option<String>);
+
+#[async_trait]
+impl IdTokenProvider for StaticIdToken {
+    async fn id_token(&self) -> Option<String> {
+        self.0.clone()
+    }
+}
+
 pub struct PvcClient {
     identity_server_url: Url,
     relay_url: Url,
@@ -97,6 +149,72 @@ pub struct PvcClient {
     ohttp_key_config: KeyConfig,
     session_id: Option<String>,
     noise_transport: Option<Arc<Mutex<NoiseNnTransport>>>,
+    /// Live source for the identity token used during session recovery.
+    /// When unset, [`PvcClient::recover_session`] re-handshakes
+    /// unauthenticated, which matches the OAuth-disabled deployment.
+    id_token_provider: Option<Arc<dyn IdTokenProvider>>,
+    /// Context key uploaded after the most recent handshake. Cached so the
+    /// session recovery path can re-attach it to the freshly created Noise
+    /// session without requiring the caller to redo the upload.
+    cached_context_key: Option<ContextKey>,
+}
+
+#[cfg(feature = "attestation")]
+fn nvidia_verifier_config() -> VerifierConfig {
+    serde_json::from_str(NVIDIA_REMOTE_VERIFIER_CONFIG).unwrap()
+}
+
+#[cfg(feature = "attestation")]
+async fn verify_evidence(
+    evidence: &types::AttestationEvidence,
+    report_data: &TeeReportData<'_>,
+) -> Result<Claim> {
+    let config = match evidence.tee_type {
+        Tee::Nvidia => Some(nvidia_verifier_config()),
+        _ => None,
+    };
+    let verifier = to_verifier(&evidence.tee_type, config)
+        .await
+        .context("failed to build attestation verifier")?;
+    verifier
+        .evaluate(
+            evidence.evidence.clone(),
+            report_data,
+            &InitDataHash::NotProvided,
+        )
+        .await
+        .map_err(Into::into)
+}
+
+#[cfg(feature = "attestation")]
+fn device_report_data_for_tee<'a>(tee_type: Tee, report_data: &'a [u8]) -> TeeReportData<'a> {
+    match tee_type {
+        Tee::Nvidia => {
+            assert!(report_data.len() >= NVIDIA_NONCE_SIZE);
+            TeeReportData::Value(&report_data[0..NVIDIA_NONCE_SIZE])
+        }
+        Tee::SampleDevice => TeeReportData::Value(report_data),
+        _ => TeeReportData::Value(report_data),
+    }
+}
+
+#[cfg(feature = "attestation")]
+async fn verify_attestation(
+    cpu_evidence: &types::AttestationEvidence,
+    device_evidences: &[types::AttestationEvidence],
+    report_data: &[u8],
+) -> Result<Claim> {
+    let cpu_report_data = TeeReportData::Value(report_data);
+    let mut claim = verify_evidence(cpu_evidence, &cpu_report_data).await?;
+    info!("device tee num: {:?}", device_evidences.len());
+    for device_evidence in device_evidences {
+        let device_report_data = device_report_data_for_tee(device_evidence.tee_type, report_data);
+        match verify_evidence(device_evidence, &device_report_data).await {
+            Ok(mut device_claim) => claim.append(&mut device_claim),
+            Err(e) => error!("failed to verify device evidence {:?}", e),
+        }
+    }
+    Ok(claim)
 }
 
 impl PvcClient {
@@ -115,7 +233,18 @@ impl PvcClient {
             ohttp_key_config: key_config,
             session_id: None,
             noise_transport: None,
+            id_token_provider: None,
+            cached_context_key: None,
         })
+    }
+
+    /// Registers a provider consulted by [`Self::recover_session`] to
+    /// fetch the identity token at recovery time. Long-lived hosts should
+    /// pass an adapter over their live token state (e.g.
+    /// `Arc<RwLock<Option<String>>>` for Rocket); short-lived CLIs can use
+    /// [`StaticIdToken`] to inject a one-shot value loaded from disk.
+    pub fn set_id_token_provider(&mut self, provider: Arc<dyn IdTokenProvider>) {
+        self.id_token_provider = Some(provider);
     }
 
     pub async fn from_config(config: &PvcClientConfig) -> Result<Self> {
@@ -134,112 +263,150 @@ impl PvcClient {
 
     pub async fn handshake_with_attestation(&mut self, id_token: Option<String>) -> Result<()> {
         let identity = self.get_identity_token(id_token).await?;
-        let claims = self.attest_with_identity(None, &identity).await?;
-        let verifying_key = extract_report_data(&claims);
-        self.establish_with_identity(verifying_key, &identity)
+        let verified = self.handshake_attestation_with_identity(&identity).await?;
+        self.session_id = verified.session_id;
+        self.establish_with_identity(verified.handshake_verifying_key, &identity)
             .await?;
         Ok(())
     }
 
+    /// Performs a one-shot attestation against the target server.
+    ///
+    /// When a `nonce` is supplied, the request hits `/v1/attestation` with
+    /// the explicit nonce contract and does **not** carry an identity
+    /// header — the server-side route is unauthenticated and the client
+    /// flow only needs to bind the returned evidence to the supplied
+    /// nonce. When no nonce is supplied, we run the authenticated
+    /// `/v1/handshake` path and reuse its verified claim set, which also
+    /// updates [`PvcClient::session_id`] for any follow-up request.
     pub async fn attest(
         &mut self,
         nonce: Option<String>,
         id_token: Option<String>,
     ) -> Result<Claim> {
-        let identity = self.get_identity_token(id_token).await?;
-        self.attest_with_identity(nonce, &identity).await
+        match nonce {
+            Some(nonce) => self.attest_with_nonce(nonce).await,
+            None => {
+                let identity = self.get_identity_token(id_token).await?;
+                let verified = self.handshake_attestation_with_identity(&identity).await?;
+                self.session_id = verified.session_id;
+                Ok(verified.claims)
+            }
+        }
     }
 
-    async fn attest_with_identity(
-        &mut self,
-        nonce: Option<String>,
-        identity: &(String, String),
-    ) -> Result<Claim> {
-        let handshake_header = self.generate_identity_header(identity)?;
+    async fn attest_with_nonce(&self, nonce: String) -> Result<Claim> {
+        self.attest_with_nonce_and_headers(nonce, None).await
+    }
 
-        let resp: AttestationResponse = match &nonce {
-            Some(nonce) => {
-                let nonce_data = BASE64_STANDARD.decode(nonce)?;
-                self.ohttp_post(
-                    &self.target_url,
-                    ATTESTATION_PATH,
-                    Some(handshake_header),
-                    Some(nonce_data),
-                )
-                .await?
-                .ok_or(ApiError::MissingData)?
-            }
-            None => self
-                .ohttp_post(
-                    &self.target_url,
-                    HANDSHAKE_WITH_ATTESTATION_PATH,
-                    Some(handshake_header),
-                    None,
-                )
-                .await?
-                .ok_or(ApiError::MissingData)?,
-        };
+    async fn attest_with_nonce_and_headers(
+        &self,
+        nonce: String,
+        headers: Option<HeaderMap>,
+    ) -> Result<Claim> {
+        let mut attestation_headers = headers.unwrap_or_default();
+        attestation_headers.insert(CONTENT_TYPE, HeaderValue::from_static("application/json"));
+        let body = serde_json::to_vec(&types::AttestationRequest {
+            nonce: nonce.clone(),
+        })?;
+        let resp: AttestationResponse = self
+            .ohttp_post(
+                &self.target_url,
+                ATTESTATION_PATH,
+                Some(attestation_headers),
+                Some(body),
+            )
+            .await?
+            .ok_or(ApiError::MissingData)?;
 
         let claim = {
             #[cfg(feature = "attestation")]
             {
-                let (cpu_report_data, gpu_report_data) = match &nonce {
-                    Some(n) => {
-                        let decoded_nonce = BASE64_STANDARD.decode(n)?;
-                        assert!(decoded_nonce.len() >= NVIDIA_NONCE_SIZE);
-                        (
-                            TeeReportData::Value(&decoded_nonce.clone()),
-                            TeeReportData::Value(&decoded_nonce.clone()[0..NVIDIA_NONCE_SIZE]),
-                        )
-                    }
-                    None => (TeeReportData::NotProvided, TeeReportData::NotProvided),
-                };
-
-                let verifier = to_verifier(&resp.tee_type, None).await.unwrap();
-                let mut claim = verifier
-                    .evaluate(resp.evidence, &cpu_report_data, &InitDataHash::NotProvided)
-                    .await?;
-                info!("device tee num: {:?}", resp.device_evidences);
-                if let Some((tee, evidence)) = resp.device_evidences {
-                    let json_data = r#"{
-                        "nvidia_verifier": {
-                            "type": "Remote",
-                            "verifier_url": "https://nras.attestation.nvidia.com/v4/attest"
-                        }
-                    }"#;
-                    let config: verifier::VerifierConfig = serde_json::from_str(json_data).unwrap();
-                    let device_verifier = to_verifier(&tee, Some(config)).await.unwrap();
-                    match device_verifier
-                        .evaluate(
-                            evidence.clone(),
-                            &gpu_report_data,
-                            &InitDataHash::NotProvided,
-                        )
-                        .await
-                    {
-                        Ok(mut device_claim) => {
-                            claim.append(&mut device_claim);
-                        }
-                        Err(e) => {
-                            error!("failed to verify device evidence {:?}", e)
-                        }
-                    };
+                let decoded_nonce = BASE64_STANDARD.decode(&nonce)?;
+                if decoded_nonce.len() != 64 {
+                    return Err(anyhow!("attestation nonce must decode to 64 bytes"));
                 }
-                claim
+                verify_attestation(
+                    &resp.attestation.cpu,
+                    &resp.attestation.devices,
+                    &decoded_nonce,
+                )
+                .await?
             }
 
             #[cfg(not(feature = "attestation"))]
             {
                 let mut claim = Vec::new();
-                claim.push((resp.evidence, "cpu".to_string()));
+                claim.push((resp.attestation.cpu.evidence.clone(), "cpu".to_string()));
                 claim
             }
         };
 
-        if self.session_id.is_none() && resp.sid.is_some() {
-            self.session_id = resp.sid;
-        }
         Ok(claim)
+    }
+
+    async fn handshake_attestation_with_identity(
+        &mut self,
+        identity: &(String, String),
+    ) -> Result<VerifiedHandshake> {
+        let handshake_header = self.generate_identity_header(identity)?;
+        let resp: AttestationResponse = self
+            .ohttp_post(
+                &self.target_url,
+                HANDSHAKE_WITH_ATTESTATION_PATH,
+                Some(handshake_header),
+                None,
+            )
+            .await?
+            .ok_or(ApiError::MissingData)?;
+
+        let handshake_verifying_key: [u8; 64] = resp
+            .binding
+            .as_ref()
+            .ok_or_else(|| anyhow!("missing attestation binding material"))
+            .and_then(|binding| {
+                BASE64_STANDARD
+                    .decode(&binding.handshake_verifying_key)
+                    .map_err(|e| anyhow!(e))?
+                    .try_into()
+                    .map_err(|_| anyhow!("invalid handshake verifying key length"))
+            })?;
+
+        let claims = {
+            #[cfg(feature = "attestation")]
+            {
+                // The server uses `handshake_verifying_key` (64 bytes) as
+                // report_data for CPU evidence and for sample-device evidence,
+                // while NVIDIA verification only consumes the first 32 bytes.
+                // Choose the device report-data shape per tee type so minikube
+                // sample attestation and real NVIDIA attestation both verify.
+                verify_attestation(
+                    &resp.attestation.cpu,
+                    &resp.attestation.devices,
+                    &handshake_verifying_key,
+                )
+                .await?
+            }
+
+            #[cfg(not(feature = "attestation"))]
+            {
+                let mut claim = Vec::new();
+                claim.push((resp.attestation.cpu.evidence.clone(), "cpu".to_string()));
+                claim.extend(
+                    resp.attestation
+                        .devices
+                        .iter()
+                        .map(|device| (device.evidence.clone(), "gpu".to_string())),
+                );
+                claim
+            }
+        };
+
+        Ok(VerifiedHandshake {
+            handshake_verifying_key,
+            session_id: resp.session.map(|session| session.id),
+            claims,
+        })
     }
 
     pub async fn establish(
@@ -308,6 +475,11 @@ impl PvcClient {
                 Some(encrypted_key),
             )
             .await?;
+        // Cache for the recovery path: after a forced re-handshake the new
+        // session has no context key, and any subsequent RAG-flavoured chat
+        // would silently lose the document store. Keeping the key here lets
+        // `recover_session` re-attach it to the fresh session id.
+        self.cached_context_key = Some(session_key.clone());
         Ok(())
     }
 
@@ -330,7 +502,51 @@ impl PvcClient {
         Ok(())
     }
 
+    /// Issues a chat completions request against pvc-tee-llm with transparent
+    /// single-shot session recovery.
+    ///
+    /// The cached `sid` lives only as long as the pvc-tee-server pod that
+    /// minted it. After a tee-server restart the sid is gone and the data
+    /// guard on the server rejects the request with `InvalidSessionId`. With
+    /// the catcher registered in pvc-tee-llm this surfaces here as an
+    /// `ApiError::BackendError { code: ApiCode::InvalidSessionId, .. }`
+    /// inside `chat_completions_once`. For backwards compatibility with
+    /// older pods that still emit Rocket's default HTML 400 (which the
+    /// OHTTP gateway translates to 502) we also recognise the 502 / fuzzy
+    /// match via [`is_session_rejected`].
+    ///
+    /// The orchestration (send → on InvalidSessionId, recover → resend once)
+    /// is delegated to [`execute_with_session_recovery`] so the retry
+    /// invariants (max-1 retry, propagate non-session errors as-is, fail
+    /// fast if recovery itself fails) can be unit-tested against a mock
+    /// transport — see the `execute_with_session_recovery_*` tests below.
+    ///
+    /// Concurrency note: callers wrap `PvcClient` in an `Arc<RwLock<…>>`
+    /// (see `pvc-client/src/server.rs`). The write-lock held for the entire
+    /// duration of this method serialises concurrent recovery, so we don't
+    /// need a separate per-session mutex / coalescing OnceCell. If concurrent
+    /// throughput on the chat endpoint ever becomes a bottleneck the simplest
+    /// upgrade is to acquire a finer-grained `tokio::sync::Mutex` around just
+    /// the recovery step; today the coarse RwLock is sufficient.
     pub async fn chat_completions(
+        &mut self,
+        h: Option<&HeaderMap>,
+        body: &[u8],
+    ) -> Result<ChatCompletionStream> {
+        let op = ChatCompletionsOp {
+            client: self,
+            headers: h.cloned(),
+            body: body.to_vec(),
+        };
+        execute_with_session_recovery(op).await
+    }
+
+    /// Single attempt of `chat_completions`: encrypt with the current Noise
+    /// transport, POST through the OHTTP relay, and either return the
+    /// decrypted stream or propagate a structured `ApiError::BackendError`
+    /// when the response body is a JSON envelope instead of a Noise
+    /// ciphertext stream.
+    async fn chat_completions_once(
         &mut self,
         h: Option<&HeaderMap>,
         body: &[u8],
@@ -350,7 +566,7 @@ impl PvcClient {
         let encrypted_input = self
             .encrypt_message(body)
             .map_err(|e| anyhow!("Failed to encrypt message: {}", e))?;
-        let stream = self
+        let raw_stream = self
             .ohttp_post_stream(
                 &self.target_url,
                 CHAT_COMPLETIONS_PATH,
@@ -359,7 +575,30 @@ impl PvcClient {
             )
             .await?;
 
+        let stream = intercept_error_envelope(raw_stream).await?;
         self.decrypt_cipher_stream(stream).await
+    }
+
+    /// Drops the cached session state and re-runs the handshake (and
+    /// context-key upload, if one was cached). Pulls the identity token
+    /// from the registered [`IdTokenProvider`] at call time instead of a
+    /// stale cache so re-authentication on the host side (e.g. Rocket
+    /// updating `oauth_token`) is picked up automatically. Idempotent in
+    /// the sense that repeated calls just produce a fresh sid each time;
+    /// safe to invoke from the recovery path even when the prior handshake
+    /// never happened.
+    async fn recover_session(&mut self) -> Result<()> {
+        self.session_id = None;
+        self.noise_transport = None;
+        let token = match &self.id_token_provider {
+            Some(provider) => provider.id_token().await,
+            None => None,
+        };
+        self.handshake_with_attestation(token).await?;
+        if let Some(key) = self.cached_context_key.clone() {
+            self.upload_encryption_key(&key).await?;
+        }
+        Ok(())
     }
 
     async fn get_identity_token(&self, id_token: Option<String>) -> Result<(String, String)> {
@@ -455,6 +694,213 @@ impl PvcClient {
     }
 }
 
+/// Abstracts a single session-using operation that can be transparently
+/// retried after a session has been invalidated on the server.
+///
+/// Splitting [`PvcClient::chat_completions`] into "attempt the request" +
+/// "recover the session" via this trait lets us unit-test the retry
+/// orchestration (max-1 retry, correct error fall-through, no infinite
+/// loops) without spinning up an OHTTP stack.
+#[async_trait]
+trait SessionedOperation: Send {
+    type Output: Send;
+
+    /// Performs one attempt of the underlying request. Errors that satisfy
+    /// [`is_session_rejected`] trigger a single recovery + retry; all other
+    /// errors are propagated unchanged.
+    async fn attempt(&mut self) -> Result<Self::Output>;
+
+    /// Re-establishes session state (typically: clear sid, run a fresh
+    /// `handshake_with_attestation`, re-upload context key). Called at most
+    /// once per [`execute_with_session_recovery`] invocation.
+    async fn recover_session(&mut self) -> Result<()>;
+}
+
+/// Drives [`SessionedOperation`] with single-shot session recovery.
+///
+/// Semantics — exactly one retry, never more:
+///
+/// 1. Run `op.attempt()`. On success, return.
+/// 2. On any other error, return it unchanged. We do not touch the cached
+///    session for non-session-rejection failures (e.g. network timeouts,
+///    decrypt errors) because those tend to be transient at a lower layer
+///    and rehandshaking would make recovery flakier, not faster.
+/// 3. On a session-rejection error (see [`is_session_rejected`]), log a
+///    warning, call `op.recover_session()`. If recovery itself fails we
+///    propagate that error with context — we do not loop, so a broken
+///    handshake path cannot turn into an infinite retry storm.
+/// 4. Run `op.attempt()` one more time and return whatever it produces,
+///    even if it is another `InvalidSessionId`. The caller's retry budget
+///    is intentionally bounded at "one extra try" to keep failure modes
+///    predictable.
+async fn execute_with_session_recovery<O>(mut op: O) -> Result<O::Output>
+where
+    O: SessionedOperation,
+{
+    match op.attempt().await {
+        Ok(v) => Ok(v),
+        Err(e) if is_session_rejected(&e) => {
+            warn!(
+                error = %e,
+                "session rejected by tee-llm, re-handshaking and retrying once",
+            );
+            op.recover_session()
+                .await
+                .with_context(|| "failed to recover session after InvalidSessionId from tee-llm")?;
+            info!("session re-established, retrying request once");
+            match op.attempt().await {
+                Ok(v) => Ok(v),
+                Err(e) => {
+                    error!(error = %e, "retry after session recovery also failed");
+                    Err(e)
+                }
+            }
+        }
+        Err(e) => Err(e),
+    }
+}
+
+/// Adapter that lets `PvcClient::chat_completions` go through
+/// [`execute_with_session_recovery`] without exposing the trait publicly.
+struct ChatCompletionsOp<'a> {
+    client: &'a mut PvcClient,
+    headers: Option<HeaderMap>,
+    body: Vec<u8>,
+}
+
+#[async_trait]
+impl<'a> SessionedOperation for ChatCompletionsOp<'a> {
+    type Output = ChatCompletionStream;
+
+    async fn attempt(&mut self) -> Result<ChatCompletionStream> {
+        self.client
+            .chat_completions_once(self.headers.as_ref(), &self.body)
+            .await
+    }
+
+    async fn recover_session(&mut self) -> Result<()> {
+        self.client.recover_session().await
+    }
+}
+
+/// Returns `true` when an error from a session-using request looks like the
+/// client should re-handshake before retrying once.
+///
+/// Detection order (most-specific first):
+///
+/// 1. A `BackendError` other than `InvalidSessionId`. We must short-circuit
+///    here so that, for example, a `NoiseDecryptFailed` envelope is NOT
+///    treated as a session-recovery signal even though the same envelope
+///    family is involved.
+/// 2. Structured `ApiError::BackendError { code: ApiCode::InvalidSessionId,
+///    .. }` — produced by `intercept_error_envelope` after the tee-llm 400
+///    catcher rewrites Rocket's default HTML 400 into a JSON envelope.
+///    This is the canonical signal on post-rollout deployments.
+/// 3. A 502 Bad Gateway from the OHTTP relay. The gateway maps any non-2xx
+///    backend response to 502, so a tee-llm pod that predates the catcher
+///    fix surfaces here as `reqwest::Error` whose `Display` contains the
+///    canonical `"502 Bad Gateway"` token. We require BOTH substrings to
+///    appear in the error message before re-handshaking, so unrelated
+///    failures whose Display happens to contain "502" (e.g. a port number
+///    or UUID) do not trigger spurious recovery.
+///
+///    This branch exists purely for backward compatibility with older
+///    deployments that have not yet picked up the catchers. Once those are
+///    drained, the branch can be deleted along with its dedicated test.
+/// 4. Explicit local client state gaps such as a missing Noise transport.
+///    This lets the first chat request lazily bootstrap session state in
+///    OAuth-enabled deployments where startup warmup is skipped.
+/// 5. A last-ditch fuzzy text match against `InvalidSessionId` / "Invalid
+///    session ID" anywhere in the error chain, in case a future transport
+///    surfaces the structured code via a different error shape.
+pub fn is_session_rejected(err: &anyhow::Error) -> bool {
+    if let Some(api_err) = err.downcast_ref::<ApiError>() {
+        return matches!(
+            api_err,
+            ApiError::BackendError { code, .. } if *code == ApiCode::InvalidSessionId as i32,
+        );
+    }
+    let msg = err.to_string();
+    // Require BOTH tokens to avoid matching unrelated text. The canonical
+    // reqwest format is `HTTP status server error (502 Bad Gateway) for
+    // url (...)`, so this still catches the production-observed shape.
+    if msg.contains("502") && msg.contains("Bad Gateway") {
+        return true;
+    }
+    if msg.contains("noise transport is none") || msg.contains("noise transport missing") {
+        return true;
+    }
+    if msg.contains("InvalidSessionId") || msg.contains("Invalid session ID") {
+        return true;
+    }
+    false
+}
+
+/// Peeks at the first chunk(s) of a (likely) Noise-encrypted response stream
+/// and short-circuits to a structured `ApiError::BackendError` when the body
+/// is actually a plaintext `ApiResponse` envelope.
+///
+/// The tee-llm `chat_completions` handler returns one of two body shapes:
+///
+/// * Happy path: a length-prefixed Noise cipher stream where the first 4
+///   bytes are a big-endian frame length. For any reasonably sized frame
+///   (< 16 MiB) the first byte is `0x00`.
+/// * Error path: the project-wide `ApiResponse` JSON envelope rendered by
+///   `ApiCode::respond_to` (always a 200 OK on the wire so the OHTTP gateway
+///   forwards the body intact). JSON envelopes always start with `{`.
+///
+/// We only buffer the response when the first byte is `{` — i.e. only in
+/// the rare "session rejected" path. The bytes we buffered are re-emitted as
+/// a single chunk when decoding fails or the envelope turns out to be a
+/// success code, so the streaming behaviour of the success path is
+/// preserved.
+async fn intercept_error_envelope(
+    mut stream: Pin<Box<dyn Stream<Item = Result<Bytes>> + Send>>,
+) -> Result<Pin<Box<dyn Stream<Item = Result<Bytes>> + Send>>> {
+    const MAX_ENVELOPE_BYTES: usize = 64 * 1024;
+
+    let first = match stream.next().await {
+        Some(Ok(chunk)) => chunk,
+        Some(Err(e)) => return Err(e),
+        None => return Ok(Box::pin(futures::stream::empty())),
+    };
+
+    if first.first() != Some(&b'{') {
+        let initial = futures::stream::iter(vec![Ok(first)]);
+        return Ok(Box::pin(initial.chain(stream)));
+    }
+
+    let mut buf: Vec<u8> = first.to_vec();
+    while buf.len() <= MAX_ENVELOPE_BYTES {
+        match stream.next().await {
+            Some(Ok(chunk)) => buf.extend_from_slice(&chunk),
+            Some(Err(e)) => return Err(e),
+            None => break,
+        }
+    }
+
+    if buf.len() > MAX_ENVELOPE_BYTES {
+        // Way too big to be an envelope; rejoin and treat as a Noise stream.
+        let initial = futures::stream::iter(vec![Ok(Bytes::from(buf))]);
+        return Ok(Box::pin(initial.chain(stream)));
+    }
+
+    match serde_json::from_slice::<ApiResponse<serde_json::Value>>(&buf) {
+        Ok(envelope) if envelope.code != ApiCode::Success => Err(ApiError::BackendError {
+            code: envelope.code,
+            message: envelope.message,
+        }
+        .into()),
+        _ => {
+            // Either a 200 success envelope (unexpected on this path) or
+            // arbitrary leading bytes that happened to start with `{`. Fall
+            // through to the Noise codec by re-emitting what we buffered.
+            let single = futures::stream::iter(vec![Ok(Bytes::from(buf))]);
+            Ok(Box::pin(single))
+        }
+    }
+}
+
 pub fn create_or_get_encryption_key() -> Result<ContextKey> {
     let path = key_path_in_home()?;
     match fs::read(&path) {
@@ -527,20 +973,32 @@ pub fn remove_file_if_exists(path: &Path) -> Result<()> {
     }
 }
 
-pub fn extract_report_data(claims: &Claim) -> ReportData {
+/// Extract the 64-byte CPU `report_data` from a verified claim set.
+///
+/// Kept `pub(crate)` because the canonical client flow now binds against
+/// `binding.handshake_verifying_key` from the normalized handshake
+/// response, not the in-quote report data. This helper is retained for
+/// the unit tests and for any future internal caller that needs to
+/// re-derive the report data from a parsed claim list.
+#[allow(dead_code)]
+pub(crate) fn extract_report_data(claims: &Claim) -> Result<ReportData> {
     let cpu = claims
         .iter()
         .find(|(_val, key)| key == "cpu")
         .map(|(val, _key)| val)
-        .unwrap();
-    let report_data_str = cpu["report_data"].as_str().unwrap();
+        .ok_or_else(|| anyhow!("missing cpu claim"))?;
+    let report_data_str = cpu["report_data"]
+        .as_str()
+        .ok_or_else(|| anyhow!("missing cpu report_data claim"))?;
     match hex::decode(report_data_str) {
-        Ok(r) => r.try_into().unwrap(),
+        Ok(report_data) => report_data
+            .try_into()
+            .map_err(|_| anyhow!("invalid cpu report_data length")),
         Err(_) => BASE64_STANDARD
             .decode(report_data_str)
-            .unwrap()
+            .map_err(|e| anyhow!(e))?
             .try_into()
-            .unwrap(),
+            .map_err(|_| anyhow!("invalid cpu report_data length")),
     }
 }
 
@@ -779,20 +1237,20 @@ impl OhttpClient for PvcClient {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use serde_json::json;
 
-    #[test]
-    fn test_verify_signature_with_raw_p1363_bytes() {
+    fn sign_noise_message() -> ([u8; 64], Vec<u8>, Vec<u8>, [u8; 64]) {
         use p256::ecdsa::{Signature, SigningKey, VerifyingKey, signature::Signer};
         use p256::elliptic_curve::rand_core::OsRng;
 
         let signing_key = SigningKey::random(&mut OsRng);
         let verifying_key = VerifyingKey::from(&signing_key);
 
-        let e = b"client_ephemeral_e";
-        let ee = b"server_ephemeral_ee";
+        let e = b"client_ephemeral_e".to_vec();
+        let ee = b"server_ephemeral_ee".to_vec();
         let mut msg = Vec::new();
-        msg.extend_from_slice(e);
-        msg.extend_from_slice(ee);
+        msg.extend_from_slice(&e);
+        msg.extend_from_slice(&ee);
 
         let sig: Signature = signing_key.sign(&msg);
         let raw64: [u8; 64] = sig.to_bytes().into();
@@ -800,6 +1258,416 @@ mod tests {
         let vk_raw = &vk_bytes.as_bytes()[1..65];
         let verifying_key: [u8; 64] = vk_raw.try_into().unwrap();
 
-        verify_noise_script_signature(verifying_key, e, ee, &raw64).unwrap();
+        (verifying_key, e, ee, raw64)
+    }
+
+    #[test]
+    fn test_verify_signature_with_raw_p1363_bytes() {
+        let (verifying_key, e, ee, signature) = sign_noise_message();
+
+        verify_noise_script_signature(verifying_key, &e, &ee, &signature).unwrap();
+    }
+
+    #[test]
+    fn test_verify_signature_rejects_mismatched_binding_material() {
+        use p256::ecdsa::{SigningKey, VerifyingKey};
+        use p256::elliptic_curve::rand_core::OsRng;
+
+        let (_verifying_key, e, ee, signature) = sign_noise_message();
+        let other_signing_key = SigningKey::random(&mut OsRng);
+        let other_verifying_key = VerifyingKey::from(&other_signing_key);
+        let other_bytes = other_verifying_key.to_encoded_point(false);
+        let mismatched_key: [u8; 64] = other_bytes.as_bytes()[1..65].try_into().unwrap();
+
+        let error = verify_noise_script_signature(mismatched_key, &e, &ee, &signature).unwrap_err();
+
+        assert!(
+            error
+                .to_string()
+                .contains("failed to verify noise script signature")
+        );
+    }
+
+    #[test]
+    fn extract_report_data_supports_cpu_only_claims() {
+        let report_data = [7u8; 64];
+        let claims = vec![(
+            json!({"report_data": hex::encode(report_data)}),
+            "cpu".to_string(),
+        )];
+
+        assert_eq!(extract_report_data(&claims).unwrap(), report_data);
+    }
+
+    #[test]
+    fn extract_report_data_ignores_device_claims() {
+        let report_data = [9u8; 64];
+        let claims = vec![
+            (
+                json!({"nonce": BASE64_STANDARD.encode([3u8; 32])}),
+                "gpu".to_string(),
+            ),
+            (
+                json!({"report_data": BASE64_STANDARD.encode(report_data)}),
+                "cpu".to_string(),
+            ),
+        ];
+
+        assert_eq!(extract_report_data(&claims).unwrap(), report_data);
+    }
+
+    #[cfg(feature = "attestation")]
+    #[test]
+    fn device_report_data_for_nvidia_uses_32_byte_nonce() {
+        let report_data = [7u8; 64];
+
+        // `verifier::ReportData` has multiple variants (e.g. `NotProvided`),
+        // so this `let`-binding is refutable. Use `let else` and panic
+        // explicitly when the helper diverges from its documented contract
+        // of always returning `Value(_)` — an `unreachable!()` would silently
+        // swallow a regression in test mode.
+        let TeeReportData::Value(value) = device_report_data_for_tee(Tee::Nvidia, &report_data)
+        else {
+            panic!("device_report_data_for_tee(Nvidia) must return Value(_)");
+        };
+        assert_eq!(value, &report_data[..NVIDIA_NONCE_SIZE]);
+    }
+
+    #[cfg(feature = "attestation")]
+    #[test]
+    fn device_report_data_for_sample_device_uses_full_report_data() {
+        let report_data = [11u8; 64];
+
+        let TeeReportData::Value(value) =
+            device_report_data_for_tee(Tee::SampleDevice, &report_data)
+        else {
+            panic!("device_report_data_for_tee(SampleDevice) must return Value(_)");
+        };
+        assert_eq!(value, &report_data[..]);
+    }
+
+    #[test]
+    fn is_session_rejected_detects_structured_invalid_session_id() {
+        let err = anyhow::Error::new(ApiError::BackendError {
+            code: ApiCode::InvalidSessionId as i32,
+            message: "Invalid session ID".to_string(),
+        });
+
+        assert!(is_session_rejected(&err));
+    }
+
+    #[test]
+    fn is_session_rejected_detects_502_bad_gateway_from_reqwest_text() {
+        // Reproduces the exact `reqwest::Error::Display` shape we see in
+        // production logs when pvc-tee-llm returns a default 400 page and the
+        // OHTTP gateway translates it to 502 Bad Gateway.
+        let err =
+            anyhow!("HTTP status server error (502 Bad Gateway) for url (http://pvc-relay:8787/)");
+
+        assert!(is_session_rejected(&err));
+    }
+
+    #[test]
+    fn is_session_rejected_fuzzy_matches_session_id_string() {
+        let err = anyhow!("upstream said: InvalidSessionId");
+        assert!(is_session_rejected(&err));
+
+        let pretty = anyhow!("backend reported Invalid session ID for sid=abc");
+        assert!(is_session_rejected(&pretty));
+    }
+
+    #[test]
+    fn is_session_rejected_detects_missing_local_noise_transport() {
+        let err =
+            anyhow!("Failed to encrypt message: noise transport is none, internal error happens");
+        assert!(is_session_rejected(&err));
+
+        let decrypt_path = anyhow!("noise transport missing");
+        assert!(is_session_rejected(&decrypt_path));
+    }
+
+    #[test]
+    fn is_session_rejected_ignores_unrelated_errors() {
+        let err = anyhow!("connection refused");
+        assert!(!is_session_rejected(&err));
+
+        let api_err = anyhow::Error::new(ApiError::BackendError {
+            code: ApiCode::NoiseDecryptFailed as i32,
+            message: "decrypt failure".to_string(),
+        });
+        assert!(!is_session_rejected(&api_err));
+
+        let local_crypto_err = anyhow!("Failed to encrypt message: invalid key material");
+        assert!(!is_session_rejected(&local_crypto_err));
+    }
+
+    #[test]
+    fn is_session_rejected_502_branch_requires_both_tokens() {
+        // Pure "502" without "Bad Gateway" must NOT trigger recovery —
+        // otherwise a URL containing the substring "502" (e.g. a port or
+        // request id) would unnecessarily force a re-handshake.
+        let port_in_url = anyhow!("connect failed for url (http://service:9502/health)");
+        assert!(!is_session_rejected(&port_in_url));
+
+        // Pure "Bad Gateway" without "502" is unlikely from reqwest but
+        // still must not trigger — leaves the door open for a future
+        // proxy that emits the phrase outside the 502 path.
+        let bad_gateway_only = anyhow!("upstream returned: Bad Gateway placeholder body");
+        assert!(!is_session_rejected(&bad_gateway_only));
+    }
+
+    #[tokio::test]
+    async fn intercept_error_envelope_returns_structured_error_for_envelope_body() {
+        let envelope = ApiResponse::<serde_json::Value> {
+            code: ApiCode::InvalidSessionId as i32,
+            message: "Invalid session ID".to_string(),
+            data: None,
+        };
+        let body = serde_json::to_vec(&envelope).unwrap();
+        let stream: Pin<Box<dyn Stream<Item = Result<Bytes>> + Send>> =
+            Box::pin(futures::stream::iter(vec![Ok(Bytes::from(body))]));
+
+        let err = match intercept_error_envelope(stream).await {
+            Ok(_) => panic!("error envelope should short-circuit to Err"),
+            Err(e) => e,
+        };
+        assert!(is_session_rejected(&err));
+    }
+
+    #[tokio::test]
+    async fn intercept_error_envelope_passes_through_noise_like_bytes() {
+        // Noise frames start with a 4-byte big-endian length prefix; the
+        // first byte for any < 16 MiB frame is `0x00`, which is distinct
+        // from the `{` that a JSON envelope would start with.
+        let noise_bytes = vec![0x00, 0x00, 0x00, 0x04, 0xDE, 0xAD, 0xBE, 0xEF];
+        let stream: Pin<Box<dyn Stream<Item = Result<Bytes>> + Send>> = Box::pin(
+            futures::stream::iter(vec![Ok(Bytes::from(noise_bytes.clone()))]),
+        );
+
+        let mut out = intercept_error_envelope(stream).await.unwrap();
+        let first = out
+            .next()
+            .await
+            .expect("stream should emit at least one chunk")
+            .unwrap();
+        assert_eq!(first.as_ref(), noise_bytes.as_slice());
+    }
+
+    // --- session-recovery orchestration tests ----------------------------
+    //
+    // The tests below exercise `execute_with_session_recovery` directly via
+    // a hand-rolled `SessionedOperation` mock. They cover the invariants
+    // declared on `PvcClient::chat_completions`:
+    //
+    //   * a single `InvalidSessionId` triggers exactly one recovery + retry,
+    //   * non-session errors pass straight through without touching the
+    //     session,
+    //   * a back-to-back `InvalidSessionId` does NOT loop (max 2 attempts,
+    //     1 recovery),
+    //   * a recovery failure short-circuits the retry.
+
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    /// Behaviour script driving the per-attempt outcome.
+    #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+    enum AttemptOutcome {
+        Ok,
+        InvalidSession,
+        MissingLocalNoiseTransport,
+        OtherError,
+    }
+
+    /// Mock `SessionedOperation` whose attempts return a scripted sequence
+    /// of outcomes. We count both `attempt` and `recover_session` calls via
+    /// `Arc<AtomicUsize>` so the assertions can inspect them after the
+    /// helper consumes the op.
+    struct ScriptedOp {
+        outcomes: Vec<AttemptOutcome>,
+        attempt_calls: Arc<AtomicUsize>,
+        recover_calls: Arc<AtomicUsize>,
+        recover_outcome: Result<(), &'static str>,
+    }
+
+    #[async_trait]
+    impl SessionedOperation for ScriptedOp {
+        type Output = &'static str;
+
+        async fn attempt(&mut self) -> Result<Self::Output> {
+            let idx = self.attempt_calls.fetch_add(1, Ordering::SeqCst);
+            // Guard against the helper ever issuing a third attempt.
+            assert!(
+                idx < self.outcomes.len(),
+                "execute_with_session_recovery issued attempt #{} but only {} scripted",
+                idx + 1,
+                self.outcomes.len()
+            );
+            match self.outcomes[idx] {
+                AttemptOutcome::Ok => Ok("payload"),
+                AttemptOutcome::InvalidSession => Err(anyhow::Error::new(ApiError::BackendError {
+                    code: ApiCode::InvalidSessionId as i32,
+                    message: "Invalid session ID".to_string(),
+                })),
+                AttemptOutcome::MissingLocalNoiseTransport => Err(anyhow!(
+                    "Failed to encrypt message: noise transport is none, internal error happens"
+                )),
+                AttemptOutcome::OtherError => Err(anyhow!("transport timeout")),
+            }
+        }
+
+        async fn recover_session(&mut self) -> Result<()> {
+            self.recover_calls.fetch_add(1, Ordering::SeqCst);
+            match self.recover_outcome {
+                Ok(()) => Ok(()),
+                Err(msg) => Err(anyhow!(msg)),
+            }
+        }
+    }
+
+    fn counters() -> (Arc<AtomicUsize>, Arc<AtomicUsize>) {
+        (Arc::new(AtomicUsize::new(0)), Arc::new(AtomicUsize::new(0)))
+    }
+
+    #[tokio::test]
+    async fn execute_with_session_recovery_retries_after_invalid_session() {
+        // First call fails with InvalidSessionId, recovery succeeds, second
+        // call succeeds. This is the primary success path the task asks us
+        // to verify: 2 attempts, 1 handshake, retry result is returned.
+        let (attempts, recoveries) = counters();
+        let op = ScriptedOp {
+            outcomes: vec![AttemptOutcome::InvalidSession, AttemptOutcome::Ok],
+            attempt_calls: attempts.clone(),
+            recover_calls: recoveries.clone(),
+            recover_outcome: Ok(()),
+        };
+
+        let result = execute_with_session_recovery(op).await;
+
+        assert_eq!(result.unwrap(), "payload");
+        assert_eq!(
+            attempts.load(Ordering::SeqCst),
+            2,
+            "expected exactly two attempts (original + retry)"
+        );
+        assert_eq!(
+            recoveries.load(Ordering::SeqCst),
+            1,
+            "expected exactly one recovery handshake between the attempts"
+        );
+    }
+
+    #[tokio::test]
+    async fn execute_with_session_recovery_retries_after_missing_local_noise_transport() {
+        let (attempts, recoveries) = counters();
+        let op = ScriptedOp {
+            outcomes: vec![
+                AttemptOutcome::MissingLocalNoiseTransport,
+                AttemptOutcome::Ok,
+            ],
+            attempt_calls: attempts.clone(),
+            recover_calls: recoveries.clone(),
+            recover_outcome: Ok(()),
+        };
+
+        let result = execute_with_session_recovery(op).await;
+
+        assert_eq!(result.unwrap(), "payload");
+        assert_eq!(attempts.load(Ordering::SeqCst), 2);
+        assert_eq!(recoveries.load(Ordering::SeqCst), 1);
+    }
+
+    #[tokio::test]
+    async fn execute_with_session_recovery_no_retry_on_first_success() {
+        let (attempts, recoveries) = counters();
+        let op = ScriptedOp {
+            outcomes: vec![AttemptOutcome::Ok],
+            attempt_calls: attempts.clone(),
+            recover_calls: recoveries.clone(),
+            recover_outcome: Ok(()),
+        };
+
+        let result = execute_with_session_recovery(op).await;
+
+        assert_eq!(result.unwrap(), "payload");
+        assert_eq!(attempts.load(Ordering::SeqCst), 1);
+        assert_eq!(
+            recoveries.load(Ordering::SeqCst),
+            0,
+            "recovery must not run on the happy path",
+        );
+    }
+
+    #[tokio::test]
+    async fn execute_with_session_recovery_passes_through_unrelated_errors() {
+        // Non-session-rejection errors must be returned verbatim and must
+        // NOT trigger a re-handshake. Triggering a handshake on every
+        // network blip would be a denial-of-service waiting to happen.
+        let (attempts, recoveries) = counters();
+        let op = ScriptedOp {
+            outcomes: vec![AttemptOutcome::OtherError],
+            attempt_calls: attempts.clone(),
+            recover_calls: recoveries.clone(),
+            recover_outcome: Ok(()),
+        };
+
+        let err = execute_with_session_recovery(op).await.unwrap_err();
+
+        assert!(err.to_string().contains("transport timeout"));
+        assert_eq!(attempts.load(Ordering::SeqCst), 1);
+        assert_eq!(recoveries.load(Ordering::SeqCst), 0);
+    }
+
+    #[tokio::test]
+    async fn execute_with_session_recovery_caps_retries_at_one() {
+        // Two consecutive InvalidSessionId errors must NOT loop. If the
+        // helper ever issued a third attempt, `ScriptedOp::attempt` would
+        // panic with the out-of-range assertion above.
+        let (attempts, recoveries) = counters();
+        let op = ScriptedOp {
+            outcomes: vec![
+                AttemptOutcome::InvalidSession,
+                AttemptOutcome::InvalidSession,
+            ],
+            attempt_calls: attempts.clone(),
+            recover_calls: recoveries.clone(),
+            recover_outcome: Ok(()),
+        };
+
+        let err = execute_with_session_recovery(op).await.unwrap_err();
+
+        assert!(is_session_rejected(&err));
+        assert_eq!(attempts.load(Ordering::SeqCst), 2);
+        assert_eq!(recoveries.load(Ordering::SeqCst), 1);
+    }
+
+    #[tokio::test]
+    async fn execute_with_session_recovery_propagates_recovery_failure() {
+        // If the handshake itself fails we must surface that error (with
+        // context) instead of silently swallowing it or pretending the
+        // original InvalidSessionId did not happen.
+        let (attempts, recoveries) = counters();
+        let op = ScriptedOp {
+            outcomes: vec![AttemptOutcome::InvalidSession],
+            attempt_calls: attempts.clone(),
+            recover_calls: recoveries.clone(),
+            recover_outcome: Err("handshake refused"),
+        };
+
+        let err = execute_with_session_recovery(op).await.unwrap_err();
+        let display = format!("{:#}", err);
+
+        assert!(
+            display.contains("failed to recover session after InvalidSessionId"),
+            "expected recovery context in error chain, got: {display}"
+        );
+        assert!(
+            display.contains("handshake refused"),
+            "expected underlying handshake error in chain, got: {display}"
+        );
+        assert_eq!(
+            attempts.load(Ordering::SeqCst),
+            1,
+            "no retry must run after recovery failure",
+        );
+        assert_eq!(recoveries.load(Ordering::SeqCst), 1);
     }
 }

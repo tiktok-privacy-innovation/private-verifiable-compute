@@ -259,12 +259,41 @@ impl From<anyhow::Error> for ApiError {
 
 pub type ReportData = [u8; 64];
 
-#[derive(Serialize, Deserialize)]
-pub struct AttestationResponse {
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AttestationRequest {
+    pub nonce: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AttestationEvidence {
     pub tee_type: Tee,
     pub evidence: Value,
-    pub device_evidences: Option<(Tee, Value)>,
-    pub sid: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AttestationEnvelope {
+    pub cpu: AttestationEvidence,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub devices: Vec<AttestationEvidence>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct BindingMaterial {
+    pub handshake_verifying_key: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SessionInfo {
+    pub id: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AttestationResponse {
+    pub attestation: AttestationEnvelope,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub binding: Option<BindingMaterial>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub session: Option<SessionInfo>,
 }
 
 #[derive(Serialize, Deserialize)]

@@ -1,0 +1,57 @@
+# Copyright 2025 TikTok Inc. and/or its affiliates
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     https://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+load("@npm//:defs.bzl", "npm_link_all_packages")
+load("@npm//pvc-client/frontend:vite/package_json.bzl", vite_bin = "bin")
+
+npm_link_all_packages(name = "node_modules")
+
+# Source files that vite needs as inputs for the production build.
+_FRONTEND_SRCS = glob(
+    [
+        "src/**",
+        "*.html",
+    ],
+    allow_empty = False,
+)
+
+_FRONTEND_DEPS = [
+    ":node_modules/react",
+    ":node_modules/react-dom",
+    ":node_modules/react-router-dom",
+    ":node_modules/@vitejs/plugin-react",
+    ":node_modules/vite",
+]
+
+# Hermetic production build of the React/Vite frontend. The output is a
+# TreeArtifact at `dist/` that the pvc-client image packages under `/static`.
+vite_bin.vite(
+    name = "build",
+    srcs = _FRONTEND_SRCS + [
+        "package.json",
+        "vite.config.js",
+    ] + _FRONTEND_DEPS,
+    args = ["build"],
+    chdir = package_name(),
+    out_dirs = ["dist"],
+    visibility = ["//pvc-client:__pkg__"],
+)
+
+# Convenience target for running `vite` locally via `bazel run` (e.g. dev
+# server). Defaults to the dev server unless additional args are passed.
+vite_bin.vite_binary(
+    name = "vite",
+    chdir = package_name(),
+    visibility = ["//visibility:public"],
+)
