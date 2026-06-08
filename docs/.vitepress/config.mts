@@ -7,6 +7,7 @@ export default defineConfig({
   description:
     'Private and verifiable compute environment for context-aware AI processing with sensitive data.',
   lang: 'en-US',
+  base: '/private-verifiable-compute/',
   cleanUrls: true,
   lastUpdated: true,
   ignoreDeadLinks: 'localhostLinks',
