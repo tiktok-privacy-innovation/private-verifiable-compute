@@ -169,18 +169,13 @@ impl NoiseNnTransport {
     }
 
     /// encrypt the message and attach the ciphertext length in prefix (4 bytes)
-    /// the result can be parsed by tiko's LengthDelimitedCodec.
+    /// the result can be parsed by tokio_util's LengthDelimitedCodec.
     ///
-    /// ```
-    /// use tiko::codec::LengthDelimitedCodec;
-    ///
-    /// let ct = encrypt_with_prefix_len("message")?;
-    /// let mut codec = LengthDelimitedCodec::builder().length_delimiter(4).build().new_reader(ct);
-    /// codec.then(move |frame| {
-    ///    // the prefix field (4bytes) is already stripped
-    ///    decrypt(frame)
-    /// })
-    ///
+    /// ```text
+    /// let ciphertext = initiator.encrypt_with_prefix_len(b"message")?;
+    /// let frame = read_next_length_delimited_frame(ciphertext)?;
+    /// // The four-byte prefix has already been stripped.
+    /// let plaintext = responder.decrypt(frame)?;
     /// ```
     pub fn encrypt_with_prefix_len(&mut self, pt: &[u8]) -> Result<Vec<u8>> {
         self._encrypt(pt, /*attach_len*/ true)
